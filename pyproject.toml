@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "microcorrelate"
+version = "0.1.0"
+description = "A Python library for correlative microscopy image analysis"
+authors = [{ name = "Davide Bottone", email = "davide.bottone@empa.ch" }]
+license = {text = "MIT"}
+dependencies = [
+    "numpy>=2",
+    "scikit-image>=0.25",
+    "xmltodict>=0.14",
+    "imagecodecs>=2024.12.30"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "black",
+    "flake8"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["microcorrelate"]
+
+[tool.pytest.ini_options]
+pythonpath = "src"
