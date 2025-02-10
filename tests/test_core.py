@@ -1,10 +1,9 @@
-import pytest
-from pathlib import Path
 import numpy as np
-from microcorrelate.core import stitch_images
-from imageio.v3 import imwrite
+import pytest
+from imageio.v3 import immeta, imwrite
 from tifffile import TiffFile
-from imageio.v3 import immeta
+
+from microcorrelate.core import stitch_images
 
 # Constants for the mock tileset
 TILE_SIZE = 128

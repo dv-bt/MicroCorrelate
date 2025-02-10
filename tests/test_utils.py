@@ -1,6 +1,6 @@
-import pytest
-from pathlib import Path
-from microcorrelate.utils import round_up_multiple, extract_integers
+import pytest  # noqa: F401
+
+from microcorrelate.utils import extract_integers, round_up_multiple
 
 
 def test_round_up_multiple():

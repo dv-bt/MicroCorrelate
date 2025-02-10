@@ -12,7 +12,7 @@ dependencies = [
     "numpy>=2",
     "scikit-image>=0.25",
     "xmltodict>=0.14",
-    "imagecodecs>=2024.12.30"
+    "imagecodecs>=2024.12.30",
 ]
 
 [project.optional-dependencies]
@@ -20,7 +20,8 @@ dev = [
     "pytest",
     "pytest-cov",
     "black",
-    "flake8"
+    "flake8",
+    "pre-commit>=4.1.0",
 ]
 
 [tool.setuptools.packages.find]

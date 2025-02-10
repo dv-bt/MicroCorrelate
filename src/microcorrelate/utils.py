@@ -2,8 +2,8 @@
 This module is a placeholder for the utils module of the microcorrelate package.
 """
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 
 def round_up_multiple(num: int, base: int) -> int:

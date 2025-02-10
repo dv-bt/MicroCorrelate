@@ -4,11 +4,13 @@ This module contains the core functionality of the microcorrelate package.
 
 import re
 from pathlib import Path
-from imageio.v3 import imread
+
 import numpy as np
 import xmltodict
+from imageio.v3 import imread
 from tifffile import TiffWriter
-from microcorrelate.utils import extract_integers, round_up_multiple
+
+from microcorrelate.utils import extract_integers
 
 
 def stitch_images(tileset_path: Path | str, dest_path: Path | str) -> None:
@@ -71,11 +73,11 @@ def stitch_images(tileset_path: Path | str, dest_path: Path | str) -> None:
             "PhysicalSizeY": pixelsize,
             "PhysicalSizeYUnit": "µm",
         }
-        options = dict(
-            tile=(128, 128),
-            resolutionunit="CENTIMETER",
-            maxworkers=2,
-        )
+        options = {
+            "tile": (128, 128),
+            "resolutionunit": "CENTIMETER",
+            "maxworkers": 2,
+        }
         tif.write(
             image_stitch,
             resolution=(1e4 / pixelsize, 1e4 / pixelsize),
