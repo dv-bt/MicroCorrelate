@@ -37,3 +37,4 @@ jobs:
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
         slug: dv-bt/MicroCorrelate
+        files: ./coverage.xml
