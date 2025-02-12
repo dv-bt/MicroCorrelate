@@ -1,9 +1,13 @@
 """Tests for the utility functions in microcorrelate.utils."""
 
-import pytest  # noqa: F401
 import skimage as ski
 
-from microcorrelate.utils import extract_integers, read_downscaled, round_up_multiple
+from microcorrelate.utils import (
+    create_itk_image,
+    extract_integers,
+    read_downscaled,
+    round_up_multiple,
+)
 
 
 def test_round_up_multiple():
@@ -67,3 +71,30 @@ def test_read_downscaled(tmp_path):
         rgb_image.shape[1] // 2,
     )
     assert downscaled_rgb_image.ndim == 2
+
+
+def test_create_itk_image():
+    image = ski.data.camera()
+
+    # Test with no scaling
+    itk_image = create_itk_image(image)
+    assert itk_image.GetOrigin() == (0.0, 0.0)
+    assert itk_image.GetSpacing() == (1.0, 1.0)
+
+    # Test with scaling
+    scaling = 0.5
+    itk_image = create_itk_image(image, scaling)
+    assert itk_image.GetOrigin() == (-0.25, -0.25)
+    assert itk_image.GetSpacing() == (0.5, 0.5)
+
+    scaling = 2
+    itk_image = create_itk_image(image, scaling)
+    assert itk_image.GetOrigin() == (0.5, 0.5)
+    assert itk_image.GetSpacing() == (2, 2)
+
+    # Test with defined original spacing
+    spacing_old = 2
+    scaling = 0.5
+    itk_image = create_itk_image(image, scaling, spacing_old)
+    assert itk_image.GetOrigin() == (-0.5, -0.5)
+    assert itk_image.GetSpacing() == (1.0, 1.0)

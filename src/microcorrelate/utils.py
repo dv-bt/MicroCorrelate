@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 import numpy as np
+import SimpleITK as sitk  # noqa: N813
 import skimage as ski
 
 
@@ -61,3 +62,44 @@ def read_downscaled(image_path: Path, downscale_factor: int) -> np.ndarray[float
         image_ds = ski.color.rgb2gray(image_ds)
 
     return image_ds
+
+
+def create_itk_image(
+    image: np.ndarray,
+    scaling: float | int = 1,
+    spacing_old: float = 1.0,
+    origin_old: tuple[float] = (0.0, 0.0),
+) -> sitk.Image:
+    """Converts a NumPy array to a SimpleITK Image with optional scaling.
+    Only single-channel images with isotropic pixels are supported.
+    For a reference of the SimpleITK Image orgin and spacing, see:
+    https://itk.org/ITKSoftwareGuide/html/Book1/ITKSoftwareGuide-Book1ch4.html
+
+    Parameters:
+    -----------
+    image : np.ndarray
+        The input image as a NumPy array.
+    scaling : float or int, optional
+        The scaling factor for the image spacing. Default is 1 (no scaling).
+    spacing_old : float, optional
+        The original spacing of the image. Default is 1.0.
+    origin_old : tuple of float, optional
+        The original origin of the image. Default is (0.0, 0.0).
+
+    Returns:
+    --------
+    image_itk : SimpleITK.Image
+        The resulting SimpleITK Image with updated spacing and origin if scaling
+        is applied.
+    """
+
+    image_itk = sitk.GetImageFromArray(image)
+
+    if scaling != 1:
+        spacing_new = spacing_old * scaling
+        origin_scaling = (spacing_new - spacing_old) / 2
+        origin_new = tuple(i + origin_scaling for i in origin_old)
+        image_itk.SetOrigin(origin_new)
+        image_itk.SetSpacing((spacing_new, spacing_new))
+
+    return image_itk
