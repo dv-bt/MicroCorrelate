@@ -1,6 +1,9 @@
-import pytest  # noqa: F401
+"""Tests for the utility functions in microcorrelate.utils."""
 
-from microcorrelate.utils import extract_integers, round_up_multiple
+import pytest  # noqa: F401
+import skimage as ski
+
+from microcorrelate.utils import extract_integers, read_downscaled, round_up_multiple
 
 
 def test_round_up_multiple():
@@ -34,3 +37,33 @@ def test_extract_integers(tmp_path):
     regex_pattern = r"nonexistent_(\d+)\.txt"
     result = extract_integers(tmp_path, regex_pattern, glob_pattern)
     assert result == []
+
+
+def test_read_downscaled(tmp_path):
+    # Create a test image
+    image = ski.data.camera()
+    image_path = tmp_path / "test_image.png"
+    ski.io.imsave(image_path, image)
+
+    # Test downscaling by a factor of 2
+    downscale_factor = 2
+    downscaled_image = read_downscaled(image_path, downscale_factor)
+    assert downscaled_image.shape == (image.shape[0] // 2, image.shape[1] // 2)
+
+    # Test downscaling by a factor of 4
+    downscale_factor = 4
+    downscaled_image = read_downscaled(image_path, downscale_factor)
+    assert downscaled_image.shape == (image.shape[0] // 4, image.shape[1] // 4)
+
+    # Test with an RGB image
+    rgb_image = ski.data.astronaut()
+    rgb_image_path = tmp_path / "test_rgb_image.png"
+    ski.io.imsave(rgb_image_path, rgb_image)
+
+    downscale_factor = 2
+    downscaled_rgb_image = read_downscaled(rgb_image_path, downscale_factor)
+    assert downscaled_rgb_image.shape == (
+        rgb_image.shape[0] // 2,
+        rgb_image.shape[1] // 2,
+    )
+    assert downscaled_rgb_image.ndim == 2
