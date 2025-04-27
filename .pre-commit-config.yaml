@@ -1,39 +1,23 @@
 ---
 repos:
-    - repo: https://github.com/pre-commit/pre-commit-hooks
-      rev: v5.0.0
-      hooks:
-          - id: end-of-file-fixer
-          - id: trailing-whitespace
-          - id: check-yaml
-          - id: check-added-large-files
-    - repo: https://github.com/pycqa/isort
-      rev: 6.0.1
-      hooks:
-          - id: isort
-            args: [--profile, black, --filter-files]
-    - repo: https://github.com/PyCQA/autoflake
-      rev: v2.3.1
-      hooks:
-          - id: autoflake
-    - repo: https://github.com/psf/black
-      rev: 25.1.0
-      hooks:
-          - id: black
-            language_version: python3
-    - repo: https://github.com/PyCQA/flake8
-      rev: 7.2.0
-      hooks:
-          - id: flake8
-            args: [--count, --show-source, --statistics, --ignore=E,W]
-            additional_dependencies:
-                - flake8-bugbear
-                - flake8-builtins
-                - flake8-comprehensions
-                - flake8-debugger
-                - flake8-eradicate
-                - flake8-logging-format
-                - pep8-naming
-                - tryceratops
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-added-large-files
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.4
+    hooks:
+      - id: ruff
+        args: [ --fix ]
+      - id: ruff-format
+  - repo: https://github.com/python-poetry/poetry
+    rev: 2.1.2
+    hooks:
+      - id: poetry-check
+      - id: poetry-lock
+      - id: poetry-install
 ci:
     autoupdat_schedule: quarterly
