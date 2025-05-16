@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import SimpleITK as sitk  # noqa: N813
 import skimage as ski
+import cv2
 
 
 def round_up_multiple(num: int, base: int) -> int:
@@ -31,8 +32,8 @@ def extract_integers(
     return matches
 
 
-def read_downscaled(image_path: Path, downscale_factor: int) -> np.ndarray[float]:
-    """Read an image from the given path, downscale it by the specified factor,
+def read_downscaled(image_path: Path, downscale_factor: int = 1) -> np.ndarray[float]:
+    """Read an image from the given path, optinally downscaling it by the specified factor,
     and convert it to grayscale if it is an RGB image. The downscaled image is
     returned as a floating point image.
 
@@ -41,7 +42,8 @@ def read_downscaled(image_path: Path, downscale_factor: int) -> np.ndarray[float
     image_path : Path
         The path to the image file.
     downscale_factor : int
-        The factor by which to downscale the image.
+        The factor by which to downscale the image. Dowscale if larger than 1.
+        Default = 1
 
     Returns:
     --------
@@ -50,16 +52,23 @@ def read_downscaled(image_path: Path, downscale_factor: int) -> np.ndarray[float
     """
 
     image_full = ski.io.imread(image_path)
-    if image_full.ndim == 2:
-        downscale_tuple = (downscale_factor, downscale_factor)
-    else:
-        downscale_tuple = (downscale_factor, downscale_factor, 1)
 
-    image_ds = ski.transform.downscale_local_mean(image_full, downscale_tuple)
+    # If downscale factor is 1, return the original image
+    if downscale_factor <= 1:
+        return image_full
+
+    # Calculate new dimensions for the resized image
+    height, width = image_full.shape[:2]
+    new_height, new_width = height // downscale_factor, width // downscale_factor
+
+    # Resize the image using OpenCV
+    image_ds = cv2.resize(
+        image_full, (new_width, new_height), interpolation=cv2.INTER_LINEAR
+    )
 
     # If the image is 3-channel, assume it's RGB and covert it to grayscale
     if image_full.ndim == 3:
-        image_ds = ski.color.rgb2gray(image_ds)
+        image_ds = cv2.cvtColor(image_ds, cv2.COLOR_RGB2GRAY)
 
     return image_ds
 
@@ -102,4 +111,42 @@ def create_itk_image(
         image_itk.SetOrigin(origin_new)
         image_itk.SetSpacing((spacing_new, spacing_new))
 
+    return image_itk
+
+
+def read_itk_image(
+    image_path: Path,
+    downscale_factor: int,
+    spacing: float = 1.0,
+    origin: tuple[float] = (0.0, 0.0),
+):
+    """
+    Read an ITK image from the given path and return it as an ITK image object.
+    This function reads a microscopy image using the `read_downscaled` function
+    and converts it to an ITK image using `create_itk_image`.
+
+    Parameters
+    ----------
+    image_path : Path
+        Path to the image file to read.
+    downscale_factor : int
+        Factor by which the image should be downscaled during reading.
+    spacing : float, optional
+        The spacing between pixels in the image, by default 1.0.
+    origin : tuple[float], optional
+        The physical coordinate of the origin (0,0) pixel, by default (0.0, 0.0).
+
+    Returns
+    -------
+    itk.Image
+        The read and processed ITK image object.
+
+    See Also
+    --------
+    read_downscaled : Function to read and downscale an image.
+    create_itk_image : Function to create an ITK image from a numpy array.
+    """
+
+    image_np = read_downscaled(image_path, downscale_factor)
+    image_itk = create_itk_image(image_np, downscale_factor, spacing, origin)
     return image_itk
