@@ -9,7 +9,14 @@ import numpy as np
 import xmltodict
 from imageio.v3 import imread
 from tifffile import TiffWriter
-import SimpleITK as sitk  # noqa: N813
+import SimpleITK as sitk
+from microcorrelate.callbacks import (
+    metric_end_plot,
+    metric_start_plot,
+    metric_plot_values,
+)
+import matplotlib.pyplot as plt
+from skimage.util import compare_images
 
 from microcorrelate.utils import extract_integers
 
@@ -183,9 +190,10 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
     def __init__(
         self,
         transform_function: str = "affine",
-        num_histogram_bins: int = 50,
+        num_histogram_bins: int = 30,
         learning_rate: float = 1.0,
         max_iterations: int = 200,
+        plot_metrics: bool = True,
     ):
         super().__init__()
 
@@ -206,6 +214,13 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
 
         # Initialize final transform as none
         self.final_transform = None
+
+        # Set callbacks
+        self.plot_metrics = plot_metrics
+        if self.plot_metrics:
+            self.AddCommand(sitk.sitkStartEvent, metric_start_plot)
+            self.AddCommand(sitk.sitkEndEvent, metric_end_plot)
+            self.AddCommand(sitk.sitkIterationEvent, lambda: metric_plot_values(self))
 
     def register_images(
         self, fixed_image: sitk.Image, moving_image: sitk.Image
@@ -229,6 +244,29 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
         # Need to compose the transformations after registration.
         self.final_transform = sitk.CompositeTransform(optimized_transform)
         self.final_transform.AddTransform(initial_transform)
+
+        if self.plot_metrics:
+            self._plot_comparison(fixed_image, moving_image)
+
+    def _plot_comparison(
+        self, fixed_image: sitk.Image, moving_image: sitk.Image
+    ) -> None:
+        """Plot image comparison at the end of registration"""
+        resample = sitk.ResampleImageFilter()
+        resample.SetReferenceImage(fixed_image)
+        resample.SetInterpolator(sitk.sitkLinear)
+        resample.SetTransform(self.final_transform)
+
+        final_image = resample.Execute(moving_image)
+        fig, ax = plt.subplots(dpi=200)
+        ax.imshow(
+            compare_images(
+                sitk.GetArrayFromImage(fixed_image),
+                sitk.GetArrayFromImage(final_image),
+                method="checkerboard",
+            ),
+            cmap="gray",
+        )
 
     def apply_registration(
         self, fixed_image: sitk.Image, moving_image: sitk.Image
