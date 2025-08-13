@@ -17,7 +17,7 @@ def round_up_multiple(num: int, base: int) -> int:
 
 
 def extract_integers(
-    base_path: Path, regex_pattern: str, glob_pattern: str, recursive: bool = False
+    base_path: Path, regex_pattern: str, glob_pattern: str
 ) -> list[int]:
     """Extract integers matching the group in a regex pattern from filenames matching
     the glob pattern
@@ -150,3 +150,9 @@ def read_itk_image(
     image_np = read_downscaled(image_path, downscale_factor)
     image_itk = create_itk_image(image_np, downscale_factor, spacing, origin)
     return image_itk
+
+
+def vprint(text: str, verbose: bool) -> None:
+    """Helper function for cleanly handling print statements with a verbose option"""
+    if verbose:
+        print(text)
