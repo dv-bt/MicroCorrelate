@@ -85,7 +85,10 @@ def _find_pyramid(tileset_path: Path) -> Path:
             " Only one XML file is expected per directory."
         )
 
-    return xml_matches[0].parent
+    try:
+        return xml_matches[0].parent
+    except IndexError:
+        raise ValueError(f"No pyramid.xml found in '{tileset_path}'.")
 
 
 def _get_pyramid_level(pyramid_path: Path) -> int:
