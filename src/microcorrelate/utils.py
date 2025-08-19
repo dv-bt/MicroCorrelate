@@ -4,6 +4,7 @@ This module is a placeholder for the utils module of the microcorrelate package.
 
 import re
 from pathlib import Path
+from typing import Iterator, Any
 
 import numpy as np
 import SimpleITK as sitk  # noqa: N813
@@ -156,3 +157,28 @@ def vprint(text: str, verbose: bool) -> None:
     """Helper function for cleanly handling print statements with a verbose option"""
     if verbose:
         print(text)
+
+
+def deep_items(
+    d: dict[str, Any], prefix: tuple[str, ...] = ()
+) -> Iterator[tuple[str, Any]]:
+    """Recursively yield (key.path, value) for all non-dict values
+    in a nested dictionary."""
+    for k, v in d.items():
+        if isinstance(v, dict):
+            yield from deep_items(v, prefix + (k,))
+        else:
+            path = prefix + (k,)
+            yield ".".join(path), v
+
+
+def flatten_dict(d: dict[str, Any]) -> dict[str, Any]:
+    """Flatten a nested dictionary. Key hierarchy is preserved by assigning new
+    keys as 'a.b.c'."""
+    return dict(deep_items(d))
+
+
+def find_common_vals(d1: dict[str, Any], d2: dict[str, Any]) -> dict[str, Any]:
+    """Returns a dictionary with the keys share the same value between the two input
+    dictionaries"""
+    return {key: d1[key] for key in d1.keys() if d1[key] == d2[key]}
