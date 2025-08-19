@@ -3,7 +3,7 @@ import pytest
 from imageio.v3 import immeta, imwrite
 from tifffile import TiffFile
 
-from microcorrelate.core import stitch_images
+from microcorrelate.stitching import stitch_images
 
 # Constants for the mock tileset
 TILE_SIZE = 128
