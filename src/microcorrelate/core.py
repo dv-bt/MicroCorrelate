@@ -198,7 +198,7 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
             return
         resample = sitk.ResampleImageFilter()
         resample.SetReferenceImage(fixed_image)
-        resample.SetInterpolator(sitk.sitkLinear)
+        resample.SetInterpolator(sitk.sitkBSpline)
         resample.SetTransform(self.final_transform)
         moving_image_final = resample.Execute(moving_image)
 

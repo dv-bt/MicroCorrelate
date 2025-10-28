@@ -181,4 +181,4 @@ def flatten_dict(d: dict[str, Any]) -> dict[str, Any]:
 def find_common_vals(d1: dict[str, Any], d2: dict[str, Any]) -> dict[str, Any]:
     """Returns a dictionary with the keys share the same value between the two input
     dictionaries"""
-    return {key: d1[key] for key in d1.keys() if d1[key] == d2[key]}
+    return {key: d1[key] for key in d1.keys() if d1[key] == d2.get(key)}
