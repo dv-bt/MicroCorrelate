@@ -13,6 +13,8 @@ import xmltodict
 from tifffile import TiffWriter, imread, TiffFile
 from tqdm import tqdm
 from imageio.v3 import immeta
+import zarr
+from zarr.codecs import BloscCodec, BloscShuffle
 
 from microcorrelate.utils import (
     extract_integers,
@@ -35,18 +37,19 @@ def stitch_images(
     verbose: bool = False,
 ) -> None:
     """Stitch together tiled images from a tileset acquired via the Thermo Fisher Maps
-    software and save the stitched image as a single TIFF file. The tileset is expected
-    to be in the directory structure produced by Maps, and have been already stitched
-    by the acquisition software (that is, there's no overlap or gaps between tiles).
+    software and save the stitched image as a single TIFF file or Zarr file.
+    The tileset is expected to be in the directory structure produced by Maps, and have
+    been already stitched by the acquisition software
+    (that is, there's no overlap or gaps between tiles).
 
     Parameters
     ----------
     tileset_path : Path | str
         Path to the tileset directory.
     dest_path : Path | str
-        Path to save the stitched image.
+        Path to save the stitched image. It can be either a .tif file or a .zarr store.
     compression : bool
-        Save image with compression (zlib). (default = True).
+        Save Tiff image with compression (zlib). (default = True).
     verbose : bool
         Enable verbose output (default = False).
 
@@ -58,15 +61,22 @@ def stitch_images(
     pyramid_path = _find_pyramid(tileset_path)
     vprint(f"Stitchig image at {pyramid_path}", verbose)
 
-    tile_size, pixel_size = _get_metadata(pyramid_path)
-    image_stitch = _generate_empty_image(pyramid_path, tile_size)
+    tile_shape, spacing = _get_metadata(pyramid_path)
+    print(tile_shape)
+    print(spacing)
+    image_stitch = _generate_empty_image(pyramid_path, tile_shape)
     tile_list = _get_tile_list(pyramid_path)
 
     for image_path in tqdm(tile_list, "Stitching tiles", disable=not verbose):
-        image_stitch = _stitch_tile(image_stitch, image_path, tile_size)
+        image_stitch = _stitch_tile(image_stitch, image_path, tile_shape)
 
-    acquisition_metadata = _get_acquisition_metadata(pyramid_path, verbose)
-    _save_stitch(dest_path, image_stitch, pixel_size, compression, acquisition_metadata)
+    if dest_path.suffix in [".tif", ".tiff"]:
+        acquisition_metadata = _get_acquisition_metadata(pyramid_path, verbose)
+        _save_stitch_tiff(
+            dest_path, image_stitch, spacing, compression, acquisition_metadata
+        )
+    elif dest_path.suffix == ".zarr":
+        _save_stitch_zarr(dest_path, image_stitch, spacing)
     vprint(f"Stitched image saved at {dest_path}", verbose)
 
 
@@ -103,53 +113,61 @@ def _get_tile_list(pyramid_path: Path) -> list[Path]:
     return list(pyramid_path.glob(f"l_{max_level}/*/tile*"))
 
 
-def _generate_empty_image(pyramid_path: Path, tile_size: int) -> np.ndarray:
+def _generate_empty_image(
+    pyramid_path: Path, tile_shape: tuple[int, int]
+) -> np.ndarray:
     """Generate an empty image with the correct size to house the stitched image"""
 
     max_level = _get_pyramid_level(pyramid_path)
     cols = extract_integers(pyramid_path, r"c_(\d+)", f"l_{max_level}/c_*")
     rows = extract_integers(pyramid_path, r"tile_(\d+)", f"l_{max_level}/*/tile*")
 
-    width = (max(cols) + 1) * tile_size
-    height = (max(rows) + 1) * tile_size
+    height = (max(rows) + 1) * tile_shape[0]
+    width = (max(cols) + 1) * tile_shape[1]
     return np.zeros((height, width), dtype="uint8")
 
 
 def _stitch_tile(
-    image_stitch: np.ndarray, image_path: Path, tile_size: int
+    image_stitch: np.ndarray, image_path: Path, tile_shape: tuple[int, int]
 ) -> np.ndarray:
     """
     Stitches a single tile into the main image.
     """
     image_path = str(image_path)
     image = imread(image_path)
-    col = int(re.search(r"c_(\d+)", image_path).group(1)) * tile_size
-    row = int(re.search(r"tile_(\d+)", image_path).group(1)) * tile_size
-    image_stitch[row : row + tile_size, col : col + tile_size] = image
+    col = int(re.search(r"c_(\d+)", image_path).group(1)) * tile_shape[1]
+    row = int(re.search(r"tile_(\d+)", image_path).group(1)) * tile_shape[0]
+    image_stitch[row : row + tile_shape[0], col : col + tile_shape[1]] = image
     return image_stitch
 
 
-def _get_metadata(pyramid_path: Path) -> tuple[int, float]:
+def _get_metadata(pyramid_path: Path) -> tuple[tuple[int, int], tuple[float, float]]:
     """
     Get tileset metadata from the pyramid.xml file. Takes as argument the root of the
     image pyramid structure (not the path to the xml file!) and returns a tuple of
-    (tile size, pixel size). Pixel size is reported in micrometers.
+    (tile_shape, spacing). Spacing is reported in the native units (assumed meters).
     """
 
     with open(pyramid_path / "pyramid.xml", "r") as file:
         text = file.read()
 
     pyramid_metadata = xmltodict.parse(text)["root"]
-    tile_size = int(pyramid_metadata["imageset"]["@tileWidth"])
-    pixel_size = float(pyramid_metadata["metadata"]["pixelsize"]["x"]) * 1e6
+    tile_shape = (
+        int(pyramid_metadata["imageset"]["@tileHeight"]),
+        int(pyramid_metadata["imageset"]["@tileWidth"]),
+    )
+    spacing = (
+        float(pyramid_metadata["metadata"]["pixelsize"]["y"]),
+        float(pyramid_metadata["metadata"]["pixelsize"]["x"]),
+    )
 
-    return tile_size, pixel_size
+    return tile_shape, spacing
 
 
-def _save_stitch(
+def _save_stitch_tiff(
     dest_path: Path,
     image_stitch: np.ndarray,
-    pixel_size: float,
+    spacing: float,
     compression: bool,
     acquisition_metadata: dict,
 ) -> None:
@@ -158,11 +176,14 @@ def _save_stitch(
 
     metadata_common, metadata_all = _format_metadata(acquisition_metadata)
 
+    # Convert spacing from m to µm
+    spacing_um = tuple(i * 1e6 for i in spacing)
+
     metadata = {
         "axes": "YX",
-        "PhysicalSizeX": pixel_size,
+        "PhysicalSizeX": spacing_um[1],
         "PhysicalSizeXUnit": "µm",
-        "PhysicalSizeY": pixel_size,
+        "PhysicalSizeY": spacing_um[0],
         "PhysicalSizeYUnit": "µm",
     }
     options = {
@@ -179,7 +200,7 @@ def _save_stitch(
     with TiffWriter(dest_path, bigtiff=True) as tif:
         tif.write(
             image_stitch,
-            resolution=(1e4 / pixel_size, 1e4 / pixel_size),
+            resolution=(1e4 / spacing_um[1], 1e4 / spacing_um[0]),
             metadata=metadata,
             extratags=[
                 (StitchConfig.tag_metadata_common, 7, 1, metadata_common, True),
@@ -187,6 +208,35 @@ def _save_stitch(
             ],
             **options,
         )
+
+
+def _save_stitch_zarr(
+    dest_path: Path,
+    image_stitch: np.ndarray,
+    spacing: tuple[float, float],
+    zarr_chunks: tuple[int] = (512, 512),
+) -> None:
+    """Saves the stitched image as a zarr file compatible with OME-NGFF v0.5
+    specifications"""
+    root = zarr.open_group(dest_path)
+    image_group = root.require_group("images")
+    array_name = "0"
+
+    # Convert spacing from m to nm
+    spacing_nm = tuple(i * 1e9 for i in spacing)
+
+    compressor = BloscCodec(cname="zstd", clevel=3, shuffle=BloscShuffle.bitshuffle)
+    array = image_group.require_array(
+        array_name,
+        shape=image_stitch.shape,
+        chunks=zarr_chunks,
+        dtype=image_stitch.dtype,
+        compressors=compressor,
+        overwrite=True,
+    )
+    array[...] = image_stitch
+    _write_multiscale_metadata(image_group, array_name, spacing_nm)
+    array.attrs["spacing"] = spacing_nm
 
 
 def _find_orig_images(pyramid_path: Path) -> list[Path] | None:
@@ -268,3 +318,45 @@ def read_metadata(stitch_path: Path) -> tuple[dict, dict]:
         metadata_common = read_tag_json(tif, StitchConfig.tag_metadata_common)
         metadata_all = read_tag_json(tif, StitchConfig.tag_metadata_all)
     return metadata_common, metadata_all
+
+
+def _write_multiscale_metadata(
+    group: zarr.Group, array_name: str, spacing: tuple[float, float]
+) -> None:
+    """Create multiscales specifications compliant with OME-NGFF format v0.5.
+
+    This only crates the metadata for a single scale, assumed to be fullres.
+
+    Parameters
+    ----------
+    group : zarr.Group
+        The group containing the array
+    array_name : str
+        The name of the array within the group
+    spacing : tuple[float, float]
+        A tuple of the YX pixel spacing, in nanometers.
+    """
+
+    spatial_axes = [
+        {"name": "y", "type": "space", "unit": "nanometer"},
+        {"name": "x", "type": "space", "unit": "nanometer"},
+    ]
+
+    group.attrs["multiscales"] = [
+        {
+            "version": "0.5",
+            "name": "images",
+            "axes": spatial_axes,
+            "datasets": [
+                {
+                    "path": array_name,
+                    "coordinateTransformations": [
+                        {
+                            "type": "scale",
+                            "scale": spacing,
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
