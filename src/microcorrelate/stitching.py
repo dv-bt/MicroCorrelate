@@ -62,8 +62,7 @@ def stitch_images(
     vprint(f"Stitchig image at {pyramid_path}", verbose)
 
     tile_shape, spacing = _get_metadata(pyramid_path)
-    print(tile_shape)
-    print(spacing)
+    vprint(f"Dataset spacing [m]: {spacing}", verbose)
     image_stitch = _generate_empty_image(pyramid_path, tile_shape)
     tile_list = _get_tile_list(pyramid_path)
 
