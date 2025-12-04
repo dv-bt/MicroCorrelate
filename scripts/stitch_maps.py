@@ -30,7 +30,23 @@ def parse_arguments() -> argparse.Namespace:
         "--dest",
         required=True,
         type=Path,
-        help="Destination file to save the stitched image. Must be a .tif image",
+        help="Destination file to save the stitched image. Must be a .tif or .zarr file.",
+    )
+
+    parser.add_argument(
+        "-g",
+        "--group_path",
+        type=str,
+        default=None,
+        help="Optional zarr group path where to save images.",
+    )
+
+    parser.add_argument(
+        "-pl",
+        "--pyramid_levels",
+        type=int,
+        default=1,
+        help="Number of pyramid levels used when saving to a .zarr archive.",
     )
 
     parser.add_argument(
@@ -69,7 +85,14 @@ def main():
     """Main function to run the script."""
     args = parse_arguments()
     args.dest.parent.mkdir(exist_ok=True)
-    stitch_images(args.source, args.dest, args.compress, args.verbose)
+    stitch_images(
+        tileset_path=args.source,
+        dest_path=args.dest,
+        compression=args.compress,
+        group_path=args.group_path,
+        pyramid_levels=args.pyramid_levels,
+        verbose=args.verbose,
+    )
 
 
 if __name__ == "__main__":

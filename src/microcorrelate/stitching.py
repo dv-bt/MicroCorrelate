@@ -15,6 +15,8 @@ from tqdm import tqdm
 from imageio.v3 import immeta
 import zarr
 from zarr.codecs import BloscCodec, BloscShuffle
+from ome_zarr.writer import write_image
+from ome_zarr.scale import Scaler
 
 from microcorrelate.utils import (
     extract_integers,
@@ -34,6 +36,8 @@ def stitch_images(
     tileset_path: Path | str,
     dest_path: Path | str,
     compression: bool = True,
+    group_path: str | None = None,
+    pyramid_levels: int = 1,
     verbose: bool = False,
 ) -> None:
     """Stitch together tiled images from a tileset acquired via the Thermo Fisher Maps
@@ -49,7 +53,14 @@ def stitch_images(
     dest_path : Path | str
         Path to save the stitched image. It can be either a .tif file or a .zarr store.
     compression : bool
-        Save Tiff image with compression (zlib). (default = True).
+        Save Tiff image with compression (zlib). This parameter is only used when
+        output is TIff. Zarr files are always compressed. (default = True).
+    group_path : str | None
+        Path to the group in the Zarr array where images should be saved. If None, save
+        in root. This parameter is only used if output is Zarr. (default = None).
+    pyramid_levels : int
+        Number or pyramid levels used when saving to Zarr multiscales. If 1, no
+        downscaled levels are calculated. (default = 1).
     verbose : bool
         Enable verbose output (default = False).
 
@@ -66,6 +77,7 @@ def stitch_images(
     image_stitch = _generate_empty_image(pyramid_path, tile_shape)
     tile_list = _get_tile_list(pyramid_path)
 
+    vprint("Saving image...", verbose)
     for image_path in tqdm(tile_list, "Stitching tiles", disable=not verbose):
         image_stitch = _stitch_tile(image_stitch, image_path, tile_shape)
 
@@ -75,7 +87,13 @@ def stitch_images(
             dest_path, image_stitch, spacing, compression, acquisition_metadata
         )
     elif dest_path.suffix == ".zarr":
-        _save_stitch_zarr(dest_path, image_stitch, spacing)
+        _save_stitch_zarr(
+            dest_path,
+            image_stitch,
+            spacing,
+            group_path=group_path,
+            pyramid_levels=pyramid_levels,
+        )
     vprint(f"Stitched image saved at {dest_path}", verbose)
 
 
@@ -213,29 +231,62 @@ def _save_stitch_zarr(
     dest_path: Path,
     image_stitch: np.ndarray,
     spacing: tuple[float, float],
+    group_path: str | None = None,
     zarr_chunks: tuple[int] = (512, 512),
+    pyramid_levels: int = 1,
+    pyramid_factor: int = 2,
+    pyramid_method: str = "gaussian",
 ) -> None:
     """Saves the stitched image as a zarr file compatible with OME-NGFF v0.5
     specifications"""
     root = zarr.open_group(dest_path)
-    image_group = root.require_group("images")
-    array_name = "0"
+    if group_path:
+        image_group = root.require_group(group_path)
+    else:
+        image_group = root
 
     # Convert spacing from m to nm
     spacing_nm = tuple(i * 1e9 for i in spacing)
 
     compressor = BloscCodec(cname="zstd", clevel=3, shuffle=BloscShuffle.bitshuffle)
-    array = image_group.require_array(
-        array_name,
-        shape=image_stitch.shape,
-        chunks=zarr_chunks,
-        dtype=image_stitch.dtype,
-        compressors=compressor,
-        overwrite=True,
+
+    scaler = Scaler(
+        downscale=pyramid_factor, max_layer=pyramid_levels - 1, method=pyramid_method
     )
-    array[...] = image_stitch
-    _write_multiscale_metadata(image_group, array_name, spacing_nm)
-    array.attrs["spacing"] = spacing_nm
+
+    storage_options = [
+        {"chunks": zarr_chunks, "compressors": compressor}
+    ] * pyramid_levels
+    axes = [
+        {"name": "y", "type": "space", "unit": "nanometer"},
+        {"name": "x", "type": "space", "unit": "nanometer"},
+    ]
+    coordinate_transforms = _get_multiscale_props(pyramid_levels, spacing_nm)
+
+    write_image(
+        image=image_stitch,
+        group=image_group,
+        scaler=scaler,
+        axes=axes,
+        coordinate_transformations=coordinate_transforms,
+        storage_options=storage_options,
+    )
+
+    # Add spacing to array attributes
+    scale_mapping = _get_scale_mapping(image_group)
+    for arr_key, arr_spacing in scale_mapping.items():
+        array = image_group.get(arr_key)
+        array.attrs["spacing"] = arr_spacing
+
+
+def _get_multiscale_props(pyramid_levels: int, spacing_nm: tuple[int | float]) -> list:
+    """Get multiscale scales and coordinate transformations"""
+    coordinate_transformations = []
+    for level_index in range(pyramid_levels):
+        factor = 2**level_index
+        scale_nm = [spacing_nm[0] * factor, spacing_nm[1] * factor]
+        coordinate_transformations.append([{"type": "scale", "scale": scale_nm}])
+    return coordinate_transformations
 
 
 def _find_orig_images(pyramid_path: Path) -> list[Path] | None:
@@ -319,43 +370,17 @@ def read_metadata(stitch_path: Path) -> tuple[dict, dict]:
     return metadata_common, metadata_all
 
 
-def _write_multiscale_metadata(
-    group: zarr.Group, array_name: str, spacing: tuple[float, float]
-) -> None:
-    """Create multiscales specifications compliant with OME-NGFF format v0.5.
+def _get_scale_mapping(group: zarr.Group) -> dict[str, list[int | float]]:
+    """Get scale mappings from zarr group containing OME multiscales"""
 
-    This only crates the metadata for a single scale, assumed to be fullres.
+    def get_scale(dataset: dict) -> list[int | float]:
+        """Get scale from dataset"""
+        transforms = dataset["coordinateTransformations"]
+        for transform in transforms:
+            if transform["type"] == "scale":
+                return transform["scale"]
+        return []
 
-    Parameters
-    ----------
-    group : zarr.Group
-        The group containing the array
-    array_name : str
-        The name of the array within the group
-    spacing : tuple[float, float]
-        A tuple of the YX pixel spacing, in nanometers.
-    """
-
-    spatial_axes = [
-        {"name": "y", "type": "space", "unit": "nanometer"},
-        {"name": "x", "type": "space", "unit": "nanometer"},
-    ]
-
-    group.attrs["multiscales"] = [
-        {
-            "version": "0.5",
-            "name": "images",
-            "axes": spatial_axes,
-            "datasets": [
-                {
-                    "path": array_name,
-                    "coordinateTransformations": [
-                        {
-                            "type": "scale",
-                            "scale": spacing,
-                        }
-                    ],
-                }
-            ],
-        }
-    ]
+    multiscales = group.attrs["ome"]["multiscales"]
+    datasets = multiscales[0]["datasets"]
+    return {i["path"]: get_scale(i) for i in datasets}
