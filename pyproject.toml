@@ -1,6 +1,6 @@
 [project]
 name = "microcorrelate"
-version = "0.1.0"
+version = "0.1.1"
 description = "A simple Python library for handling correlative microscopy datasets"
 authors = [
     {name = "dv-bt",email = "d.bottone@pm.me"}
