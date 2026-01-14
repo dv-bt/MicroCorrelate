@@ -165,10 +165,9 @@ def _get_metadata(pyramid_path: Path) -> tuple[tuple[int, int], tuple[float, flo
     (tile_shape, spacing). Spacing is reported in the native units (assumed meters).
     """
 
-    with open(pyramid_path / "pyramid.xml", "r") as file:
-        text = file.read()
+    with open(pyramid_path / "pyramid.xml", "rb") as f:
+        pyramid_metadata = xmltodict.parse(f)["root"]
 
-    pyramid_metadata = xmltodict.parse(text)["root"]
     tile_shape = (
         int(pyramid_metadata["imageset"]["@tileHeight"]),
         int(pyramid_metadata["imageset"]["@tileWidth"]),
