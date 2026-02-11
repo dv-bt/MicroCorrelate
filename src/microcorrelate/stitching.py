@@ -118,16 +118,16 @@ def _find_pyramid(tileset_path: Path) -> Path:
         raise ValueError(f"No pyramid.xml found in '{tileset_path}'.")
 
 
-def _get_pyramid_level(pyramid_path: Path) -> int:
+def _get_pyramid_level(pyramid_path: Path) -> str:
     """Get maximum (highest resolution) pyramid level"""
-    levels = extract_integers(pyramid_path, r"l_(\d+)", "l_*")
-    return max(levels)
+    levels = [i.name for i in sorted(pyramid_path.glob("l_*/"))]
+    return levels[-1]
 
 
 def _get_tile_list(pyramid_path: Path) -> list[Path]:
     """Get list of file paths to the image tiles"""
     max_level = _get_pyramid_level(pyramid_path)
-    return list(pyramid_path.glob(f"l_{max_level}/*/tile*"))
+    return list(pyramid_path.glob(f"{max_level}/*/tile*"))
 
 
 def _generate_empty_image(
@@ -136,8 +136,8 @@ def _generate_empty_image(
     """Generate an empty image with the correct size to house the stitched image"""
 
     max_level = _get_pyramid_level(pyramid_path)
-    cols = extract_integers(pyramid_path, r"c_(\d+)", f"l_{max_level}/c_*")
-    rows = extract_integers(pyramid_path, r"tile_(\d+)", f"l_{max_level}/*/tile*")
+    cols = extract_integers(pyramid_path, r"c_(\d+)", f"{max_level}/c_*")
+    rows = extract_integers(pyramid_path, r"tile_(\d+)", f"{max_level}/*/tile*")
 
     height = (max(rows) + 1) * tile_shape[0]
     width = (max(cols) + 1) * tile_shape[1]
