@@ -25,6 +25,44 @@ def _get_tranform_function(transform_type: str) -> sitk.Transform:
         raise ValueError("Invalid transform type")
 
 
+def _create_rotation_transform(
+    angle_degrees: float,
+    image: sitk.Image,
+) -> sitk.Euler2DTransform:
+    """
+    Create a 2D rotation transform centered on the image center.
+
+    Parameters
+    ----------
+    angle_degrees : float
+        Rotation angle in degrees (counterclockwise, following standard
+        mathematical convention).
+    image : sitk.Image
+        Reference image used to determine the rotation center.
+
+    Returns
+    -------
+    sitk.Euler2DTransform
+        Rotation transform configured to rotate around the image center.
+    """
+    transform = sitk.Euler2DTransform()
+
+    # Calculate image center in physical coordinates
+    size = image.GetSize()
+    spacing = image.GetSpacing()
+    origin = image.GetOrigin()
+
+    center = [
+        origin[i] + (size[i] - 1) * spacing[i] / 2.0
+        for i in range(2)  # 2D only
+    ]
+
+    transform.SetCenter(center)
+    transform.SetAngle(np.deg2rad(angle_degrees))
+
+    return transform
+
+
 def register_images(
     fixed_image: np.ndarray,
     moving_image: np.ndarray,
@@ -32,6 +70,7 @@ def register_images(
     num_histogram_bins: int = 50,
     learning_rate: float = 1.0,
     max_iterations: int = 200,
+    initial_rotation: float | None = None,
 ) -> sitk.Transform:
     """Register two images using SimpleITK. The fixed image is the reference image to
     which the moving image is registered. Currently supported transformations are
@@ -51,11 +90,16 @@ def register_images(
         Learning rate for the gradient descent optimizer.
     max_iterations : int
         Maximum number of iterations for the gradient descent optimizer.
+    initial_rotation : float or None
+        Initial rotation angle in degrees (counterclockwise) to apply before
+        registration. Useful for coarse manual alignment. If None or 0, no
+        rotation is applied. Default is None.
 
     Returns
     -------
     final_transform : sitk.Transform
-        The final transformation.
+        The final transformation composed of manual rotation (if specified),
+        centered initialization, and optimized registration.
 
     """
 
@@ -65,6 +109,14 @@ def register_images(
         _get_tranform_function(transform_function),
         sitk.CenteredTransformInitializerFilter.GEOMETRY,
     )
+
+    # Create manual rotation transform if specified
+    manual_transform = None
+    if initial_rotation is not None and initial_rotation != 0:
+        manual_transform = _create_rotation_transform(
+            initial_rotation,
+            moving_image,
+        )
 
     registration_method = sitk.ImageRegistrationMethod()
 
@@ -82,7 +134,16 @@ def register_images(
 
     # Set the initial moving and optimized transforms.
     optimized_transform = _get_tranform_function(transform_function)
-    registration_method.SetMovingInitialTransform(initial_transform)
+
+    if manual_transform is not None:
+        # Compose manual rotation with centered initializer
+        pre_optimization_transform = sitk.CompositeTransform(2)
+        pre_optimization_transform.AddTransform(manual_transform)
+        pre_optimization_transform.AddTransform(initial_transform)
+        registration_method.SetMovingInitialTransform(pre_optimization_transform)
+    else:
+        registration_method.SetMovingInitialTransform(initial_transform)
+
     registration_method.SetInitialTransform(optimized_transform)
 
     # Set callbacks for online plotting
@@ -94,8 +155,13 @@ def register_images(
     )
 
     # Need to compose the transformations after registration.
-    final_transform = sitk.CompositeTransform(optimized_transform)
-    final_transform.AddTransform(initial_transform)
+    if manual_transform is not None:
+        final_transform = sitk.CompositeTransform(optimized_transform)
+        final_transform.AddTransform(initial_transform)
+        final_transform.AddTransform(manual_transform)
+    else:
+        final_transform = sitk.CompositeTransform(optimized_transform)
+        final_transform.AddTransform(initial_transform)
 
     # Generate report
     # TO DO
@@ -113,6 +179,7 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
         learning_rate: float = 1.0,
         max_iterations: int = 200,
         plot_metrics: bool = True,
+        initial_rotation: float | None = None,
     ):
         super().__init__()
 
@@ -134,6 +201,9 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
         # Initialize final transform as none
         self.final_transform = None
 
+        # Store initial rotation
+        self.initial_rotation = initial_rotation
+
         # Set callbacks
         self.plot_metrics = plot_metrics
         if self.plot_metrics:
@@ -142,8 +212,30 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
             self.AddCommand(sitk.sitkIterationEvent, lambda: metric_plot_values(self))
 
     def register_images(
-        self, fixed_image: sitk.Image, moving_image: sitk.Image
+        self,
+        fixed_image: sitk.Image,
+        moving_image: sitk.Image,
+        initial_rotation: float | None = None,
     ) -> None:
+        """
+        Register moving image to fixed image.
+
+        Parameters
+        ----------
+        fixed_image : sitk.Image
+            Reference image.
+        moving_image : sitk.Image
+            Image to be registered.
+        initial_rotation : float or None
+            Initial rotation angle in degrees. If provided, overrides the
+            initial_rotation set in __init__. If None, uses the value from
+            __init__. Default is None.
+        """
+        # Use method parameter if provided, otherwise use instance variable
+        rotation = (
+            initial_rotation if initial_rotation is not None else self.initial_rotation
+        )
+
         initial_transform = sitk.CenteredTransformInitializer(
             sitk.Cast(fixed_image, moving_image.GetPixelID()),
             moving_image,
@@ -151,8 +243,25 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
             sitk.CenteredTransformInitializerFilter.GEOMETRY,
         )
 
+        # Create manual rotation transform if specified
+        manual_transform = None
+        if rotation is not None and rotation != 0:
+            manual_transform = _create_rotation_transform(
+                rotation,
+                moving_image,
+            )
+
         optimized_transform = _get_tranform_function(self.transform_function)
-        self.SetMovingInitialTransform(initial_transform)
+
+        if manual_transform is not None:
+            # Compose manual rotation with centered initializer
+            pre_optimization_transform = sitk.CompositeTransform(2)
+            pre_optimization_transform.AddTransform(manual_transform)
+            pre_optimization_transform.AddTransform(initial_transform)
+            self.SetMovingInitialTransform(pre_optimization_transform)
+        else:
+            self.SetMovingInitialTransform(initial_transform)
+
         self.SetInitialTransform(optimized_transform)
 
         self.Execute(
@@ -161,8 +270,13 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
         )
 
         # Need to compose the transformations after registration.
-        self.final_transform = sitk.CompositeTransform(optimized_transform)
-        self.final_transform.AddTransform(initial_transform)
+        if manual_transform is not None:
+            self.final_transform = sitk.CompositeTransform(optimized_transform)
+            self.final_transform.AddTransform(initial_transform)
+            self.final_transform.AddTransform(manual_transform)
+        else:
+            self.final_transform = sitk.CompositeTransform(optimized_transform)
+            self.final_transform.AddTransform(initial_transform)
 
         if self.plot_metrics:
             self._plot_comparison(fixed_image, moving_image)

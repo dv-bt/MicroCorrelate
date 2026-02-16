@@ -76,80 +76,155 @@ def read_downscaled(image_path: Path, downscale_factor: int = 1) -> np.ndarray[f
 
 def create_itk_image(
     image: np.ndarray,
-    scaling: float | int = 1,
-    spacing_old: float = 1.0,
-    origin_old: tuple[float] = (0.0, 0.0),
+    spacing: float = 1.0,
+    origin: tuple[float] = (0.0, 0.0),
 ) -> sitk.Image:
-    """Converts a NumPy array to a SimpleITK Image with optional scaling.
+    """Convert a NumPy array to a SimpleITK Image.
+
+    This is a simple conversion function for creating ITK images from
+    in-memory arrays (e.g., from HDF5 files, zarr arrays, or other sources).
+    For reading and downscaling image files, use read_itk_image instead.
+
     Only single-channel images with isotropic pixels are supported.
-    For a reference of the SimpleITK Image orgin and spacing, see:
+    For a reference of the SimpleITK Image origin and spacing, see:
     https://itk.org/ITKSoftwareGuide/html/Book1/ITKSoftwareGuide-Book1ch4.html
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     image : np.ndarray
         The input image as a NumPy array.
-    scaling : float or int, optional
-        The scaling factor for the image spacing. Default is 1 (no scaling).
-    spacing_old : float, optional
-        The original spacing of the image. Default is 1.0.
-    origin_old : tuple of float, optional
-        The original origin of the image. Default is (0.0, 0.0).
+    spacing : float, optional
+        The pixel spacing in physical units. For isotropic images, this
+        is the distance between pixel centers. Default is 1.0.
+    origin : tuple of float, optional
+        The physical coordinates of the origin (0,0) pixel. Default is (0.0, 0.0).
 
-    Returns:
-    --------
+    Returns
+    -------
     image_itk : SimpleITK.Image
-        The resulting SimpleITK Image with updated spacing and origin if scaling
-        is applied.
+        SimpleITK Image object with specified spacing and origin.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from microcorrelate.utils import create_itk_image
+    >>>
+    >>> # Create from HDF5 array
+    >>> import h5py
+    >>> with h5py.File('data.h5', 'r') as f:
+    >>>     array = f['images/layer1'][:]
+    >>>     image = create_itk_image(array, spacing=0.5)
+    >>>
+    >>> # Create from zarr array
+    >>> import zarr
+    >>> z = zarr.open('data.zarr', mode='r')
+    >>> image = create_itk_image(z['images/0'][:], spacing=1.2)
     """
-
     image_itk = sitk.GetImageFromArray(image)
-
-    if scaling != 1:
-        spacing_new = spacing_old * scaling
-        origin_scaling = (spacing_new - spacing_old) / 2
-        origin_new = tuple(i + origin_scaling for i in origin_old)
-        image_itk.SetOrigin(origin_new)
-        image_itk.SetSpacing((spacing_new, spacing_new))
-
+    image_itk.SetSpacing((spacing, spacing))
+    image_itk.SetOrigin(origin)
     return image_itk
 
 
 def read_itk_image(
     image_path: Path,
-    downscale_factor: int,
+    downscale_factor: int = 1,
     spacing: float = 1.0,
     origin: tuple[float] = (0.0, 0.0),
-):
-    """
-    Read an ITK image from the given path and return it as an ITK image object.
-    This function reads a microscopy image using the `read_downscaled` function
-    and converts it to an ITK image using `create_itk_image`.
+    use_binning: bool = True,
+) -> sitk.Image:
+    """Read an image file and convert it to a SimpleITK Image with optional downscaling.
+
+    This function uses SimpleITK's native resampling to handle downscaling,
+    which automatically adjusts spacing and origin. This is more robust than
+    manual numpy-based downscaling as it preserves image metadata correctly.
 
     Parameters
     ----------
     image_path : Path
         Path to the image file to read.
-    downscale_factor : int
-        Factor by which the image should be downscaled during reading.
+    downscale_factor : int, optional
+        Factor by which to downscale the image. For example, downscale_factor=2
+        reduces the image size by half in each dimension. Default is 1 (no downscaling).
     spacing : float, optional
-        The spacing between pixels in the image, by default 1.0.
-    origin : tuple[float], optional
-        The physical coordinate of the origin (0,0) pixel, by default (0.0, 0.0).
+        The original pixel spacing in physical units before any downscaling.
+        Default is 1.0.
+    origin : tuple of float, optional
+        The physical coordinates of the origin (0,0) pixel. Default is (0.0, 0.0).
+    use_binning : bool, optional
+        If True, use BinShrink (faster, averages pixel values during downsampling).
+        If False, use Resample with linear interpolation (smoother but slower).
+        Default is True.
 
     Returns
     -------
-    itk.Image
-        The read and processed ITK image object.
+    sitk.Image
+        SimpleITK Image object, downscaled if requested. Spacing and origin are
+        automatically adjusted by SimpleITK to maintain physical coordinate system.
+
+    Notes
+    -----
+    When downscaling by factor N:
+    - Image dimensions are reduced by factor N
+    - Spacing is automatically increased by factor N
+    - Physical size of the image remains the same
+    - SimpleITK handles all metadata adjustments
+
+    Examples
+    --------
+    >>> from pathlib import Path
+    >>> from microcorrelate.utils import read_itk_image
+    >>>
+    >>> # Read image at full resolution
+    >>> image = read_itk_image(Path('image.tif'))
+    >>>
+    >>> # Read with 4x downscaling for faster processing
+    >>> image_small = read_itk_image(Path('image.tif'), downscale_factor=4)
+    >>>
+    >>> # Read with custom spacing (e.g., microscope pixel size)
+    >>> image = read_itk_image(Path('image.tif'), spacing=0.325, downscale_factor=2)
 
     See Also
     --------
-    read_downscaled : Function to read and downscale an image.
+    read_downscaled : Function to read and downscale an image using OpenCV.
     create_itk_image : Function to create an ITK image from a numpy array.
     """
+    # Try to read image using SimpleITK (handles various formats)
+    try:
+        image_itk = sitk.ReadImage(str(image_path))
+    except RuntimeError:
+        # If SimpleITK can't read it, fall back to our custom reader
+        # (handles RGB conversion, etc.)
+        image_np = read_downscaled(image_path, downscale_factor=1)
+        image_itk = sitk.GetImageFromArray(image_np)
 
-    image_np = read_downscaled(image_path, downscale_factor)
-    image_itk = create_itk_image(image_np, downscale_factor, spacing, origin)
+    # Set the original spacing and origin
+    image_itk.SetSpacing((spacing, spacing))
+    image_itk.SetOrigin(origin)
+
+    # Apply downscaling if requested
+    if downscale_factor > 1:
+        if use_binning:
+            # BinShrink: Faster, averages pixels (good for reducing noise)
+            # Automatically updates spacing by the shrink factor
+            image_itk = sitk.BinShrink(image_itk, [downscale_factor, downscale_factor])
+        else:
+            # Resample: Smoother but slower, uses interpolation
+            original_size = image_itk.GetSize()
+            new_size = [s // downscale_factor for s in original_size]
+
+            image_itk = sitk.Resample(
+                image_itk,
+                new_size,
+                sitk.Transform(),  # Identity transform
+                sitk.sitkLinear,  # Linear interpolation
+                image_itk.GetOrigin(),
+                [spacing * downscale_factor] * 2,  # New spacing
+                image_itk.GetDirection(),
+                0.0,  # Default pixel value
+                image_itk.GetPixelID(),
+            )
+
     return image_itk
 
 
