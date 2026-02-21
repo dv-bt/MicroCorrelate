@@ -76,8 +76,9 @@ def read_downscaled(image_path: Path, downscale_factor: int = 1) -> np.ndarray[f
 
 def create_itk_image(
     image: np.ndarray,
-    spacing: float = 1.0,
-    origin: tuple[float] = (0.0, 0.0),
+    spacing: float | tuple[float, float] = (1.0, 1.0),
+    origin: tuple[float, float] = (0.0, 0.0),
+    channel_axis: int | None = None,
 ) -> sitk.Image:
     """Convert a NumPy array to a SimpleITK Image.
 
@@ -85,7 +86,8 @@ def create_itk_image(
     in-memory arrays (e.g., from HDF5 files, zarr arrays, or other sources).
     For reading and downscaling image files, use read_itk_image instead.
 
-    Only single-channel images with isotropic pixels are supported.
+    Both single- and multi-channel images are supported. Pixel spacing
+    can be isotropic (scalar) or anisotropic (tuple).
     For a reference of the SimpleITK Image origin and spacing, see:
     https://itk.org/ITKSoftwareGuide/html/Book1/ITKSoftwareGuide-Book1ch4.html
 
@@ -93,11 +95,15 @@ def create_itk_image(
     ----------
     image : np.ndarray
         The input image as a NumPy array.
-    spacing : float, optional
+    spacing : float | tuple of float, optional
         The pixel spacing in physical units. For isotropic images, this
-        is the distance between pixel centers. Default is 1.0.
+        is the distance between pixel centers. Default is (1.0, 1.0).
     origin : tuple of float, optional
         The physical coordinates of the origin (0,0) pixel. Default is (0.0, 0.0).
+    channel_axis : int | None, optional
+        The axis in image that contains channel information, if the image is
+        multichannel. If None, the image is treated as single channel.
+        Default is None.
 
     Returns
     -------
@@ -120,8 +126,17 @@ def create_itk_image(
     >>> z = zarr.open('data.zarr', mode='r')
     >>> image = create_itk_image(z['images/0'][:], spacing=1.2)
     """
-    image_itk = sitk.GetImageFromArray(image)
-    image_itk.SetSpacing((spacing, spacing))
+    if np.isscalar(spacing):
+        spacing = (spacing, spacing)
+
+    multichannel = channel_axis is not None
+
+    if multichannel:
+        # sitk expects channel as last axis; move from wherever it is
+        image = np.moveaxis(image, channel_axis, -1)
+
+    image_itk = sitk.GetImageFromArray(image, isVector=multichannel)
+    image_itk.SetSpacing(spacing)
     image_itk.SetOrigin(origin)
     return image_itk
 

@@ -2,6 +2,7 @@
 This module contains the core functionality of the microcorrelate package.
 """
 
+from typing import Literal
 import numpy as np
 import SimpleITK as sitk
 from microcorrelate.callbacks import (
@@ -13,7 +14,9 @@ import matplotlib.pyplot as plt
 from skimage.util import compare_images
 
 
-def _get_tranform_function(transform_type: str) -> sitk.Transform:
+def _get_tranform_function(
+    transform_type: Literal["affine", "rigid", "similarity"],
+) -> sitk.Transform:
     """Get the SimpleITK transform function from the transform type string."""
     if transform_type == "affine":
         return sitk.AffineTransform(2)
@@ -174,7 +177,7 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
 
     def __init__(
         self,
-        transform_function: str = "affine",
+        transform_function: Literal["affine", "rigid", "similarity"] = "affine",
         num_histogram_bins: int = 30,
         learning_rate: float = 1.0,
         max_iterations: int = 200,
