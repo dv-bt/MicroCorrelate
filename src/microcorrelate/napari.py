@@ -80,6 +80,7 @@ class NapariRegistrator:
         self.moving_spacing = moving_spacing
         self.moving_channel_axis = moving_channel_axis
 
+        self.transform_type = transform_type
         self.transform = _get_transform_function(transform_type)
         self.resampled_data = np.zeros(shape=fixed_data.shape, dtype=moving_data.dtype)
 
@@ -96,6 +97,11 @@ class NapariRegistrator:
         ----------
         verbose : bool
             If True, print progress messages. Default is False.
+
+        Raises
+        ------
+        ValueError
+            If landmark counts don't match or fewer than 3 points provided.
         """
 
         pts_fixed, pts_moving = self._show_landmarks()
@@ -116,7 +122,7 @@ class NapariRegistrator:
         self,
         pts_fixed: np.ndarray,
         pts_moving: np.ndarray,
-    ) -> sitk.AffineTransform:
+    ) -> sitk.Transform:
         """
         Estimate affine transform from napari landmarks in physical coordinates.
 
@@ -129,16 +135,32 @@ class NapariRegistrator:
 
         Returns
         -------
-        sitk.AffineTransform
-            Affine transform in physical coordinates.
+        sitk.Transform
+            Transform in physical coordinates.
+
+        Raises
+        ------
+        ValueError
+            If landmark counts don't match or fewer than 3 points provided.
         """
+        # Validate landmarks
+        if len(pts_fixed) != len(pts_moving):
+            raise ValueError(
+                f"Landmark count mismatch: {len(pts_fixed)} fixed points "
+                f"vs {len(pts_moving)} moving points"
+            )
+
+        if len(pts_fixed) < 3:
+            raise ValueError(
+                f"At least 3 landmark pairs required, got {len(pts_fixed)}"
+            )
 
         moving_phys = (
             (pts_moving[:, ::-1] * self.moving_spacing[::-1]).flatten().tolist()
         )
         fixed_phys = (pts_fixed[:, ::-1] * self.fixed_spacing[::-1]).flatten().tolist()
 
-        transform = sitk.AffineTransform(2)
+        transform = _get_transform_function(self.transform_type)
         transform = sitk.LandmarkBasedTransformInitializer(
             transform, fixed_phys, moving_phys
         )
