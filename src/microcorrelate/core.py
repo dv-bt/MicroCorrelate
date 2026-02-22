@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 from skimage.util import compare_images
 
 
-def _get_tranform_function(
+def _get_transform_function(
     transform_type: Literal["affine", "rigid", "similarity"],
 ) -> sitk.Transform:
     """Get the SimpleITK transform function from the transform type string."""
@@ -109,7 +109,7 @@ def register_images(
     initial_transform = sitk.CenteredTransformInitializer(
         sitk.Cast(fixed_image, moving_image.GetPixelID()),
         moving_image,
-        _get_tranform_function(transform_function),
+        _get_transform_function(transform_function),
         sitk.CenteredTransformInitializerFilter.GEOMETRY,
     )
 
@@ -136,7 +136,7 @@ def register_images(
     registration_method.SetOptimizerScalesFromPhysicalShift()
 
     # Set the initial moving and optimized transforms.
-    optimized_transform = _get_tranform_function(transform_function)
+    optimized_transform = _get_transform_function(transform_function)
 
     if manual_transform is not None:
         # Compose manual rotation with centered initializer
@@ -242,7 +242,7 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
         initial_transform = sitk.CenteredTransformInitializer(
             sitk.Cast(fixed_image, moving_image.GetPixelID()),
             moving_image,
-            _get_tranform_function(self.transform_function),
+            _get_transform_function(self.transform_function),
             sitk.CenteredTransformInitializerFilter.GEOMETRY,
         )
 
@@ -254,7 +254,7 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
                 moving_image,
             )
 
-        optimized_transform = _get_tranform_function(self.transform_function)
+        optimized_transform = _get_transform_function(self.transform_function)
 
         if manual_transform is not None:
             # Compose manual rotation with centered initializer
