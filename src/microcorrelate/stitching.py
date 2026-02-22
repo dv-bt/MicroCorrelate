@@ -254,7 +254,7 @@ def _save_stitch_zarr(
     )
 
     storage_options = [
-        {"chunks": zarr_chunks, "compressors": compressor}
+        {"chunks": zarr_chunks, "compressors": compressor, "dtype": np.float32}
     ] * pyramid_levels
     axes = [
         {"name": "y", "type": "space", "unit": "nanometer"},
@@ -263,7 +263,7 @@ def _save_stitch_zarr(
     coordinate_transforms = _get_multiscale_props(pyramid_levels, spacing_nm)
 
     write_image(
-        image=image_stitch,
+        image=image_stitch.astype(np.float32),
         group=image_group,
         scaler=scaler,
         axes=axes,
