@@ -4,6 +4,7 @@ with Napari.
 """
 
 from __future__ import annotations
+import logging
 import sys
 from typing import Literal
 from dataclasses import dataclass
@@ -192,6 +193,21 @@ class NapariRegistrator:
 
         return result
 
+    def _create_viewer(self) -> napari.Viewer:
+        """Create napari viewer with plugin warnings suppressed."""
+        # Suppress output logging for napari plugins with incorrect schemas.
+        # This is safe for our use case since they are not used.
+        suppress = ["npe2.manifest.schema", "npe2.manifest", "npe2", "napari"]
+        saved = {name: logging.getLogger(name).level for name in suppress}
+        for name in suppress:
+            logging.getLogger(name).setLevel(logging.CRITICAL)
+        try:
+            viewer = napari.Viewer()
+        finally:
+            for name, level in saved.items():
+                logging.getLogger(name).setLevel(level)
+        return viewer
+
     def _show_landmarks(self) -> tuple[np.ndarray, np.ndarray]:
         """
         Show napari viewer for interactive landmark placement.
@@ -207,7 +223,7 @@ class NapariRegistrator:
             Moving landmark coordinates in physical units.
         """
 
-        viewer = napari.Viewer()
+        viewer = self._create_viewer()
 
         viewer.add_image(
             self.fixed_data,
@@ -263,7 +279,7 @@ class NapariRegistrator:
     def show_registered(self):
         """Show the resampled image overlaid to the fixed image"""
 
-        viewer = napari.Viewer()
+        viewer = self._create_viewer()
 
         viewer.add_image(
             self.fixed_data,
