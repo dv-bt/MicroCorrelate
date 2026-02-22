@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 from IPython.display import clear_output
 
 
-# Callback we associate with the StartEvent, sets up our new data.
 def metric_start_plot():
+    """Initialise metric plot state at the start of a registration run."""
     global metric_values, multires_iterations
     global current_iteration_number
 
@@ -17,8 +17,8 @@ def metric_start_plot():
     current_iteration_number = -1
 
 
-# Callback we associate with the EndEvent, do cleanup of data and figure.
 def metric_end_plot():
+    """Clean up metric plot state and close the figure at the end of a registration run."""
     global metric_values, multires_iterations
     global current_iteration_number
 
@@ -29,9 +29,14 @@ def metric_end_plot():
     plt.close()
 
 
-# Callback we associate with the IterationEvent, update our data and display
-# new figure.
 def metric_plot_values(registration_method):
+    """Update and display the metric plot at each optimiser iteration.
+
+    Parameters
+    ----------
+    registration_method : sitk.ImageRegistrationMethod
+        The active SimpleITK registration method.
+    """
     global metric_values, multires_iterations
     global current_iteration_number
 

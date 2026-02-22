@@ -148,14 +148,14 @@ def read_laicp_hdf5(
 
     Parameters
     ----------
-    path : Path | str
+    filepath : Path | str
         Path to the HDF5 file.
 
     Returns
     -------
     data : np.ndarray
         Image array of shape (n_channels, rows, cols). Only user selected channels
-        (ending with `'\n'` in the channel labels) and total ion count are kept.
+        (ending with ``'\\n'`` in the channel labels) and total ion count are kept.
     spacing : tuple[float, float]
         Pixel spacing in micrometers (row, col).
     labels : list[str]

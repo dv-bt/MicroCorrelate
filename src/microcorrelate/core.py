@@ -81,6 +81,7 @@ def register_images(
     mutual information metric and gradient descent with line search optimization.
 
     Parameters
+    ----------
     fixed_image : np.ndarray
         Fixed image in the registration.
     moving_image : np.ndarray
@@ -173,7 +174,35 @@ def register_images(
 
 
 class ImageRegistration(sitk.ImageRegistrationMethod):
-    """Class to register images"""
+    """Intensity-based image registration using SimpleITK.
+
+    Wraps :class:`SimpleITK.ImageRegistrationMethod` with Mattes mutual
+    information metric and gradient descent with line search optimisation.
+    Optionally plots the metric value at each iteration.
+
+    Parameters
+    ----------
+    transform_function : {"affine", "rigid", "similarity"}
+        Type of spatial transform to estimate. Default is ``"affine"``.
+    num_histogram_bins : int
+        Number of histogram bins for the Mattes mutual information metric.
+        Default is 30.
+    learning_rate : float
+        Learning rate for the gradient descent optimiser. Default is 1.0.
+    max_iterations : int
+        Maximum number of optimiser iterations. Default is 200.
+    plot_metrics : bool
+        If True, plot the metric value live during registration. Default is True.
+    initial_rotation : float or None
+        Initial rotation angle in degrees (counterclockwise) applied before
+        optimisation. If None, no pre-rotation is applied. Default is None.
+
+    Attributes
+    ----------
+    final_transform : sitk.CompositeTransform or None
+        Estimated transform after calling :meth:`register_images`.
+        ``None`` until registration has been run.
+    """
 
     def __init__(
         self,
@@ -307,6 +336,20 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
     def apply_registration(
         self, fixed_image: sitk.Image, moving_image: sitk.Image
     ) -> np.ndarray | None:
+        """Apply the estimated transform to resample a moving image onto the fixed grid.
+
+        Parameters
+        ----------
+        fixed_image : sitk.Image
+            Reference image defining the output grid.
+        moving_image : sitk.Image
+            Image to be resampled.
+
+        Returns
+        -------
+        np.ndarray or None
+            Registered image array, or None if no transform has been estimated yet.
+        """
         if not self.final_transform:
             print(
                 "Registration transformation is not yet defined.\n"

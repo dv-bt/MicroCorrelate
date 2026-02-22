@@ -68,6 +68,24 @@ def resample_to_spacing(
     output_spacing: float | tuple[float, float],
     channel_axis: int | None = None,
 ) -> np.ndarray:
+    """Resample an array to a target pixel spacing.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        Input image array.
+    input_spacing : float or tuple of float
+        Current pixel spacing. A scalar is treated as isotropic.
+    output_spacing : float or tuple of float
+        Target pixel spacing. A scalar is treated as isotropic.
+    channel_axis : int or None, optional
+        Axis containing channels, excluded from resampling. Default is None.
+
+    Returns
+    -------
+    np.ndarray
+        Resampled array with the same dtype as the input.
+    """
     if np.isscalar(input_spacing):
         input_spacing = (input_spacing, input_spacing)
     if np.isscalar(output_spacing):

@@ -28,6 +28,18 @@ from microcorrelate.utils import (
 
 @dataclass(frozen=True)
 class StitchConfig:
+    """Custom TIFF tag IDs used to store acquisition metadata in stitched images.
+
+    Attributes
+    ----------
+    tag_metadata_common : int
+        TIFF tag ID for the JSON-encoded metadata common to all acquired tiles.
+        Default is 65000.
+    tag_metadata_all : int
+        TIFF tag ID for the JSON-encoded per-tile acquisition metadata.
+        Default is 65001.
+    """
+
     tag_metadata_common: int = 65000
     tag_metadata_all: int = 65001
 
@@ -344,10 +356,12 @@ def _find_common_metadata(metadata: dict[str, dict[str, Any]]) -> dict:
 
 
 def _format_metadata(metadata: dict[str, dict[str, Any]] | None) -> tuple[str, str]:
-    """Formats the acquisition metadata as two JSON-formatted strings:
-    - the common acquisition metadata
-    - the detailed acquisition metadata for each image
-    Returns empty strings if None is passed as input metadata"""
+    """Format acquisition metadata as two JSON-encoded byte strings.
+
+    Produces a common-metadata string (keys shared across all images) and a
+    per-image metadata string. Returns empty byte strings if ``metadata`` is
+    ``None`` or empty.
+    """
 
     if not metadata:
         return "", ""
@@ -357,7 +371,20 @@ def _format_metadata(metadata: dict[str, dict[str, Any]] | None) -> tuple[str, s
 
 
 def read_metadata(stitch_path: Path) -> tuple[dict, dict]:
-    """Read acquisition metadata from stitched images"""
+    """Read acquisition metadata from a stitched TIFF image.
+
+    Parameters
+    ----------
+    stitch_path : Path
+        Path to the stitched TIFF file produced by :func:`stitch_images`.
+
+    Returns
+    -------
+    metadata_common : dict
+        Metadata keys and values shared across all acquired tiles.
+    metadata_all : dict
+        Per-tile metadata, keyed by original filename.
+    """
 
     def read_tag_json(tif: TiffFile, tag_id: int) -> dict:
         """Read tag value and parse it as a json string"""

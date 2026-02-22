@@ -35,6 +35,12 @@ pytest = "^8.4.1"
 jupyter = "^1.1.1"
 matplotlib = "^3.10.3"
 
+[tool.poetry.group.docs.dependencies]
+sphinx = ">=8.0"
+pydata-sphinx-theme = ">=0.16"
+sphinx-autoapi = ">=3.0"
+myst-parser = ">=4.0"
+
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"

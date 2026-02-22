@@ -18,7 +18,27 @@ from microcorrelate.utils import vprint
 
 @dataclass
 class ViewerParams:
-    """Visual parameters for napari viewer."""
+    """Visual parameters for the :class:`NapariRegistrator` viewer.
+
+    Attributes
+    ----------
+    fixed_color : str
+        Colormap name for the fixed image layer. Default is ``"green"``.
+    moving_color : str
+        Colormap name for the moving image layer. Default is ``"magenta"``.
+    pts_size : float
+        Size of landmark points in data units. Default is 10.0.
+    pts_border_width : float
+        Relative border width of landmark points (0-1). Default is 0.2.
+    pts_border_color : str
+        Border color of landmark points. Default is ``"white"``.
+    text_color : str
+        Color of the point index labels. Default is ``"white"``.
+    text_size : int
+        Font size of the point index labels. Default is 12.
+    text_anchor : str
+        Anchor position for the point index labels. Default is ``"upper_right"``.
+    """
 
     fixed_color: str = "green"
     moving_color: str = "magenta"
@@ -31,6 +51,77 @@ class ViewerParams:
 
 
 class NapariRegistrator:
+    """
+    Interactive landmark-based image registrator using a Napari viewer.
+
+    Place matching point pairs on the ``landmarks_fixed`` and
+    ``landmarks_moving`` layers, then close the viewer to trigger transform
+    estimation and resampling of the moving image onto the fixed grid.
+
+    Parameters
+    ----------
+    fixed_data : np.ndarray
+        Reference image. The moving image will be registered onto this grid.
+    moving_data : np.ndarray
+        Moving image to be registered.
+    fixed_spacing : tuple[float, float]
+        Pixel pitch of the fixed image (row, col) in physical units.
+    moving_spacing : tuple[float, float]
+        Pixel pitch of the moving image (row, col) in physical units.
+    transform_type : {"affine", "rigid", "similarity"}, optional
+        Type of spatial transform to estimate. Default is ``"affine"``.
+    fixed_channel_axis : int, optional
+        Channel axis index in ``fixed_data``, or None for single-channel.
+    moving_channel_axis : int, optional
+        Channel axis index in ``moving_data``, or None for single-channel.
+    viewer_params : ViewerParams, optional
+        Visual parameters for the Napari viewer. If None, uses
+        :class:`ViewerParams` defaults.
+
+    Attributes
+    ----------
+    fixed_image : sitk.Image
+        Fixed image converted to SimpleITK format (for internal use).
+    transform : sitk.Transform
+        Estimated spatial transform. Populated after calling :meth:`run`.
+    resampled_data : np.ndarray
+        Registered moving image. Populated after calling :meth:`run`.
+
+    See Also
+    --------
+    ViewerParams : Visual settings for the Napari viewer.
+
+    Examples
+    --------
+    Register a two-photon microscopy image to an SEM image:
+
+    .. code-block:: python
+
+        from microcorrelate.napari import NapariRegistrator
+
+        registrator = NapariRegistrator(
+            fixed_data=sem_image,
+            moving_data=tpef_image,
+            fixed_spacing=(0.15, 0.15),
+            moving_spacing=(1.3, 1.3),
+            transform_type='affine'
+        )
+
+        # Opens napari viewer for interactive landmark placement
+        registrator.run()
+
+        # After closing viewer, access results
+        registered_image = registrator.resampled_data
+        transform = registrator.transform
+
+    Visualize the registration result:
+
+    .. code-block:: python
+
+        # After running registration
+        registrator.show_registered()
+    """
+
     def __init__(
         self,
         fixed_data: np.ndarray,
@@ -42,34 +133,6 @@ class NapariRegistrator:
         moving_channel_axis: int | None = None,
         viewer_params: ViewerParams | None = None,
     ) -> None:
-        """Set up the Napari-based interactive registrator.
-
-        Parameters
-        ----------
-        fixed_data : np.ndarray
-            Reference image. The moving image will be registered onto this grid.
-        moving_data : np.ndarray
-            Moving image to be registered.
-        fixed_spacing : tuple[float, float]
-            Pixel pitch of the fixed image (row, col) in physical units.
-        moving_spacing : tuple[float, float]
-            Pixel pitch of the moving image (row, col) in physical units.
-        transform_type : {"affine", "rigid", "similarity"}
-            Type of spatial transform to estimate. Default is "affine".
-        fixed_channel_axis : int or None
-            Channel axis index in `fixed_data`, or None for single-channel.
-        moving_channel_axis : int or None
-            Channel axis index in `moving_data`, or None for single-channel.
-        viewer_params : ViewerParams or None
-            Parameters for the napari viewer. If None, uses the default values for
-            ViewerParams.
-
-
-        Notes
-        -----
-        After calling :meth:`run`, the estimated transform is stored in
-        ``self.transform`` and the registered moving image in ``self.resampled_data``.
-        """
         self.fixed_data = fixed_data
         self.fixed_spacing = fixed_spacing
         self.fixed_image = create_itk_image(
