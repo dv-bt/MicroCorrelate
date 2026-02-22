@@ -61,30 +61,6 @@ def find_common_vals(d1: dict[str, Any], d2: dict[str, Any]) -> dict[str, Any]:
     return {key: d1[key] for key in d1.keys() if d1[key] == d2.get(key)}
 
 
-def extract_x_spacing(filepath: str) -> float:
-    """
-    Extract X spacing value from an `exp_prop.txt` file, which contains acquisition
-    properties for TPEF (instrument?).
-
-    Parameters
-    ----------
-    filepath : str
-        Path to exp_prop.txt file
-
-    Returns
-    -------
-    float
-        X spacing in µm
-    """
-    with open(filepath, "r", encoding="latin-1") as f:
-        for line in f:
-            if line.strip().startswith("X"):
-                # Format: " X 512     1.381068 µm"
-                parts = line.split()
-                return float(parts[2])
-    raise ValueError("X spacing not found in file")
-
-
 def resample_to_spacing(
     array: np.ndarray,
     input_spacing: float | tuple[float, float],

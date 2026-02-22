@@ -2,52 +2,15 @@
 This module contains various functions to read image and create image objects.
 """
 
+from __future__ import annotations
+import re
 from pathlib import Path
 import numpy as np
-import cv2
-import skimage as ski
+from skimage.io import imread
 import SimpleITK as sitk
-
-
-def read_downscaled(image_path: Path, downscale_factor: int = 1) -> np.ndarray[float]:
-    """Read an image from the given path, optinally downscaling it by the specified factor,
-    and convert it to grayscale if it is an RGB image. The downscaled image is
-    returned as a floating point image.
-
-    Parameters:
-    -----------
-    image_path : Path
-        The path to the image file.
-    downscale_factor : int
-        The factor by which to downscale the image. Dowscale if larger than 1.
-        Default = 1
-
-    Returns:
-    --------
-    image_ds : np.ndarray
-        The downscaled grayscale image.
-    """
-
-    image_full = ski.io.imread(image_path)
-
-    # If downscale factor is 1, return the original image
-    if downscale_factor <= 1:
-        return image_full
-
-    # Calculate new dimensions for the resized image
-    height, width = image_full.shape[:2]
-    new_height, new_width = height // downscale_factor, width // downscale_factor
-
-    # Resize the image using OpenCV
-    image_ds = cv2.resize(
-        image_full, (new_width, new_height), interpolation=cv2.INTER_LINEAR
-    )
-
-    # If the image is 3-channel, assume it's RGB and covert it to grayscale
-    if image_full.ndim == 3:
-        image_ds = cv2.cvtColor(image_ds, cv2.COLOR_RGB2GRAY)
-
-    return image_ds
+import h5py
+from ome_zarr.io import parse_url
+from ome_zarr.reader import Reader
 
 
 def create_itk_image(
@@ -60,7 +23,6 @@ def create_itk_image(
 
     This is a simple conversion function for creating ITK images from
     in-memory arrays (e.g., from HDF5 files, zarr arrays, or other sources).
-    For reading and downscaling image files, use read_itk_image instead.
 
     Both single- and multi-channel images are supported. Pixel spacing
     can be isotropic (scalar) or anisotropic (tuple).
@@ -117,103 +79,203 @@ def create_itk_image(
     return image_itk
 
 
-def read_itk_image(
-    image_path: Path,
-    downscale_factor: int = 1,
-    spacing: float = 1.0,
-    origin: tuple[float] = (0.0, 0.0),
-    use_binning: bool = True,
-) -> sitk.Image:
-    """Read an image file and convert it to a SimpleITK Image with optional downscaling.
+def read_tpef(
+    image_path: Path, max_level: int = 3
+) -> tuple[np.ndarray, tuple[float, float]]:
+    """
+    Read TPEF image data and discover pixel spacing from metadata file.
 
-    This function uses SimpleITK's native resampling to handle downscaling,
-    which automatically adjusts spacing and origin. This is more robust than
-    manual numpy-based downscaling as it preserves image metadata correctly.
+    Searches for `exp_prop.txt` in the image directory and up to `max_level`
+    parent directories to extract pixel spacing information.
 
     Parameters
     ----------
     image_path : Path
-        Path to the image file to read.
-    downscale_factor : int, optional
-        Factor by which to downscale the image. For example, downscale_factor=2
-        reduces the image size by half in each dimension. Default is 1 (no downscaling).
-    spacing : float, optional
-        The original pixel spacing in physical units before any downscaling.
-        Default is 1.0.
-    origin : tuple of float, optional
-        The physical coordinates of the origin (0,0) pixel. Default is (0.0, 0.0).
-    use_binning : bool, optional
-        If True, use BinShrink (faster, averages pixel values during downsampling).
-        If False, use Resample with linear interpolation (smoother but slower).
-        Default is True.
+        Path to the TPEF image file.
+    max_level : int, optional
+        Maximum number of parent directory levels to search for `exp_prop.txt`.
+        Default is 3.
 
     Returns
     -------
-    sitk.Image
-        SimpleITK Image object, downscaled if requested. Spacing and origin are
-        automatically adjusted by SimpleITK to maintain physical coordinate system.
+    image : np.ndarray
+        Image array with shape (Z, channels, Y, X) or (channels, Y, X).
+    spacing : tuple[float, float]
+        Pixel spacing in micrometers (Y, X).
 
-    Notes
-    -----
-    When downscaling by factor N:
-    - Image dimensions are reduced by factor N
-    - Spacing is automatically increased by factor N
-    - Physical size of the image remains the same
-    - SimpleITK handles all metadata adjustments
-
-    Examples
-    --------
-    >>> from pathlib import Path
-    >>> from microcorrelate.utils import read_itk_image
-    >>>
-    >>> # Read image at full resolution
-    >>> image = read_itk_image(Path('image.tif'))
-    >>>
-    >>> # Read with 4x downscaling for faster processing
-    >>> image_small = read_itk_image(Path('image.tif'), downscale_factor=4)
-    >>>
-    >>> # Read with custom spacing (e.g., microscope pixel size)
-    >>> image = read_itk_image(Path('image.tif'), spacing=0.325, downscale_factor=2)
+    Raises
+    ------
+    FileNotFoundError
+        If `exp_prop.txt` is not found within the search scope.
 
     See Also
     --------
-    read_downscaled : Function to read and downscale an image using OpenCV.
-    create_itk_image : Function to create an ITK image from a numpy array.
+    extract_tpef_spacing : Extract spacing from `exp_prop.txt` file.
     """
-    # Try to read image using SimpleITK (handles various formats)
-    try:
-        image_itk = sitk.ReadImage(str(image_path))
-    except RuntimeError:
-        # If SimpleITK can't read it, fall back to our custom reader
-        # (handles RGB conversion, etc.)
-        image_np = read_downscaled(image_path, downscale_factor=1)
-        image_itk = sitk.GetImageFromArray(image_np)
 
-    # Set the original spacing and origin
-    image_itk.SetSpacing((spacing, spacing))
-    image_itk.SetOrigin(origin)
+    image = imread(image_path)
 
-    # Apply downscaling if requested
-    if downscale_factor > 1:
-        if use_binning:
-            # BinShrink: Faster, averages pixels (good for reducing noise)
-            # Automatically updates spacing by the shrink factor
-            image_itk = sitk.BinShrink(image_itk, [downscale_factor, downscale_factor])
-        else:
-            # Resample: Smoother but slower, uses interpolation
-            original_size = image_itk.GetSize()
-            new_size = [s // downscale_factor for s in original_size]
+    level = 0
+    found = False
+    while level <= max_level:
+        prop_path = image_path.parents[level] / "exp_prop.txt"
+        if prop_path.exists():
+            spacing = extract_tpef_spacing(prop_path)
+            found = True
+            break
+        level += 1
 
-            image_itk = sitk.Resample(
-                image_itk,
-                new_size,
-                sitk.Transform(),  # Identity transform
-                sitk.sitkLinear,  # Linear interpolation
-                image_itk.GetOrigin(),
-                [spacing * downscale_factor] * 2,  # New spacing
-                image_itk.GetDirection(),
-                0.0,  # Default pixel value
-                image_itk.GetPixelID(),
-            )
+    if not found:
+        raise FileNotFoundError(
+            "exp_prop.txt file not found within discovery scope with "
+            f"max_level={max_level}. "
+            "Check that the file exists, or increase max_level"
+        )
 
-    return image_itk
+    return image, spacing
+
+
+def read_laicp_hdf5(
+    filepath: Path | str,
+) -> tuple[np.ndarray, tuple[float, float], list[str]]:
+    """
+    Read LA-ICP-MS data from a TOFWERK HDF5 file.
+
+    Reads the reconstructed image data, infers pixel spacing from the
+    position grid, and only keep user selected channels and total ion count.
+
+    Parameters
+    ----------
+    path : Path | str
+        Path to the HDF5 file.
+
+    Returns
+    -------
+    data : np.ndarray
+        Image array of shape (n_channels, rows, cols). Only user selected channels
+        (ending with `'\n'` in the channel labels) and total ion count are kept.
+    spacing : tuple[float, float]
+        Pixel spacing in micrometers (row, col).
+    labels : list[str]
+        Channel labels corresponding to axis 0 of the preserved data.
+    """
+    with h5py.File(filepath, "r") as f:
+        data = f["tof data 1/image 1/out_default_Area_recon"][:]
+        pos = f["point cloud 1/TOFPilot sample data 1/PositionGrid"][:]
+        raw_labels = f["tof data 1/NLabel"][:]
+
+    data = data.squeeze()
+    pos = pos.squeeze()
+
+    labels = [lab[0].decode("utf-8") for lab in raw_labels]
+
+    # Keep TIC (first channel) and user-selected channels (ending with \n)
+    keep_idx = [0]
+    keep_labels = [labels[0]]
+
+    for i, lab in enumerate(labels[1:], start=1):
+        if lab.endswith("\n") and not lab.startswith("padding"):
+            keep_idx.append(i)
+            keep_labels.append(lab.strip())
+
+    data = data[keep_idx]
+
+    x, y = pos[:, 0], pos[:, 1]
+    spacing = (np.diff(np.unique(y)).mean(), np.diff(np.unique(x)).mean())
+
+    return data, spacing, keep_labels
+
+
+def read_ome_zarr(zarr_path: Path | str) -> tuple[np.ndarray, tuple[float, float]]:
+    """
+    Read highest resolution level from OME-Zarr with spacing.
+
+    Parameters
+    ----------
+    zarr_path : Path or str
+        Path to the zarr store.
+
+    Returns
+    -------
+    data : np.ndarray
+        Image array at highest resolution.
+    spacing : tuple[float, float]
+        Pixel spacing in micrometers (Y, X).
+
+    Raises
+    ------
+    ValueError
+        If unit is not nanometer or micrometer.
+    """
+
+    reader = Reader(parse_url(zarr_path))
+    nodes = list(reader())
+
+    # First node contains the image
+    node = nodes[0]
+
+    # Highest resolution is first level (index 0)
+    data = np.array(node.data[0])
+
+    axes = node.metadata["axes"]
+    coord_transforms = node.metadata["coordinateTransformations"]
+    scale = coord_transforms[0][0]["scale"]
+
+    # Get unit from axes (assuming both y and x have same unit)
+    unit = axes[0]["unit"]
+
+    if unit == "nanometer":
+        spacing = (scale[0] / 1000, scale[1] / 1000)
+    elif unit == "micrometer":
+        spacing = (scale[0], scale[1])
+    else:
+        raise ValueError(f"Unsupported unit '{unit}'")
+
+    return data, spacing
+
+
+def extract_tpef_spacing(filepath: Path | str) -> tuple[float, float]:
+    """
+    Extract YX spacing values for a TPEF experiment.
+
+    Input should be an `exp_prop.txt` file, which contains acquisition properties for
+    the experiment. This function currently ignores Z spacing.
+
+    Parameters
+    ----------
+    filepath : Path | str
+        Path to `exp_prop.txt` file. The file should contain spacing in the format
+        `" X 512     1.381068 µm"`
+
+    Returns
+    -------
+    spacing : tuple[float, float]
+        Spacing in micrometers (Y, X).
+
+    Raises
+    ------
+    ValueError
+        If X or Y spacing was not detected in the file.
+    """
+    pattern = re.compile(r"^\s*([XY])\s+\d+\s+([\d.]+)\s+µm")
+
+    x_spacing = None
+    y_spacing = None
+
+    with open(filepath, "r", encoding="latin-1") as f:
+        for line in f:
+            match = pattern.match(line)
+            if match:
+                axis, spacing = match.groups()
+                if axis == "X":
+                    x_spacing = float(spacing)
+                elif axis == "Y":
+                    y_spacing = float(spacing)
+
+    if x_spacing is None or y_spacing is None:
+        raise ValueError(
+            f"Spacing not found: X={'found' if x_spacing else 'missing'}, "
+            f"Y={'found' if y_spacing else 'missing'}"
+        )
+
+    return (y_spacing, x_spacing)
