@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterator, Any
 import numpy as np
 from skimage.transform import resize
+import cv2
 
 
 def round_up_multiple(num: int, base: int) -> int:
@@ -78,3 +79,40 @@ def resample_to_spacing(
         output_shape[ax] = int(np.round(array.shape[ax] * in_sp / out_sp))
 
     return resize(array, output_shape, preserve_range=True)
+
+
+def get_crop_idx(mask: np.ndarray, margin: int = 0) -> tuple[slice, ...]:
+    """
+    Compute array slices to crop a numpy array to the bounding box of non-zero mask regions.
+
+    Useful for removing empty borders (e.g. black frames from image stitching).
+
+    Parameters
+    ----------
+    mask : np.ndarray
+        2D binary mask where non-zero pixels define the region of interest.
+    margin : int, optional
+        Number of pixels to expand the bounding box on each side, by default 0.
+        Clamped to array boundaries.
+
+    Returns
+    -------
+    tuple[slice, ...]
+        A tuple of slices ``(row_slice, col_slice)`` that can be used to index
+        a numpy array directly, e.g. ``image[get_crop_idx(mask)]``.
+
+    Examples
+    --------
+    .. code-block:: python
+
+        cropped = image[get_crop_idx(mask, margin=10)]
+    """
+    coords = cv2.findNonZero(mask.astype(int))
+    x, y, w, h = cv2.boundingRect(coords)
+
+    x = max(x - margin, 0)
+    y = max(y - margin, 0)
+    w = min(w + 2 * margin, mask.shape[1])
+    h = min(h + 2 * margin, mask.shape[0])
+
+    return np.s_[y : y + h, x : x + w]
