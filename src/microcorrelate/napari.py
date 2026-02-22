@@ -91,85 +91,17 @@ class NapariRegistrator:
         ``landmarks_moving`` layers, then close the viewer window to trigger
         transform estimation and resampling of the moving image.
 
-        Works correctly in both standalone scripts and Jupyter notebooks. In
-        notebooks, ``napari.run()`` is non-blocking because IPython already
-        manages the Qt event loop; this method handles that transparently.
-
         Parameters
         ----------
         verbose : bool
             If True, print progress messages. Default is False.
         """
-        viewer = napari.Viewer()
 
-        viewer.add_image(
-            self.fixed_data,
-            name="image_fixed",
-            colormap=self._viewer_params.fixed_color,
-            scale=self.fixed_spacing,
-        )
-        viewer.add_image(
-            self.moving_data,
-            name="image_moving",
-            colormap=self._viewer_params.moving_color,
-            scale=self.moving_spacing,
-        )
-
-        pts_fixed = viewer.add_points(
-            name="landmarks_fixed",
-            scale=self.fixed_spacing,
-            face_color=self._viewer_params.fixed_color,
-            border_color=self._viewer_params.pts_border_color,
-            border_width=self._viewer_params.pts_border_width,
-            border_width_is_relative=True,
-        )
-        pts_moving = viewer.add_points(
-            name="landmarks_moving",
-            scale=self.moving_spacing,
-            face_color=self._viewer_params.moving_color,
-            border_color=self._viewer_params.pts_border_color,
-            border_width=self._viewer_params.pts_border_width,
-            border_width_is_relative=True,
-        )
-
-        def update_pts_text(layer):
-            """Text update callback for points layers"""
-            layer.text = {
-                "string": [str(i + 1) for i in range(len(layer.data))],
-                "color": self._viewer_params.text_color,
-                "size": self._viewer_params.text_size,
-                "anchor": self._viewer_params.text_anchor,
-            }
-
-        # Connect to data change events
-        pts_fixed.events.data.connect(lambda e: update_pts_text(pts_fixed))
-        pts_moving.events.data.connect(lambda e: update_pts_text(pts_moving))
-
-        # Initialize
-        update_pts_text(pts_fixed)
-        update_pts_text(pts_moving)
-
-        napari.run()
-
-        # napari.run() is non-blocking in Jupyter/IPython environments where
-        # the Qt event loop is already managed by IPython (%gui qt). Mirror
-        # napari's own internal check and block explicitly via a local
-        # QEventLoop until the viewer window is destroyed.
-        ipy = sys.modules.get("IPython")
-        if (
-            ipy
-            and (shell := ipy.get_ipython())
-            and getattr(shell, "active_eventloop", None) == "qt"
-        ):
-            from qtpy.QtCore import QEventLoop
-
-            loop = QEventLoop()
-            viewer.window._qt_window.destroyed.connect(loop.quit)
-            loop.exec_()
+        pts_fixed, pts_moving = self._show_landmarks()
 
         vprint("Estimating transform", verbose)
         self.transform = self._estimate_transform(
-            pts_fixed=pts_fixed.data, pts_moving=pts_moving.data
+            pts_fixed=pts_fixed, pts_moving=pts_moving
         )
 
         vprint("Resampling moving image", verbose)
@@ -260,6 +192,74 @@ class NapariRegistrator:
 
         return result
 
+    def _show_landmarks(self) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Show napari viewer for interactive landmark placement.
+
+        Displays moving and fixed images with point layers for landmark selection.
+        Returns landmark coordinates in physical units when the viewer is closed.
+
+        Returns
+        -------
+        fixed_landmarks : np.ndarray
+            Fixed landmark coordinates in physical units.
+        moving_landmarks : np.ndarray
+            Moving landmark coordinates in physical units.
+        """
+
+        viewer = napari.Viewer()
+
+        viewer.add_image(
+            self.fixed_data,
+            name="image_fixed",
+            colormap=self._viewer_params.fixed_color,
+            scale=self.fixed_spacing,
+        )
+        viewer.add_image(
+            self.moving_data,
+            name="image_moving",
+            colormap=self._viewer_params.moving_color,
+            scale=self.moving_spacing,
+        )
+
+        pts_fixed = viewer.add_points(
+            name="landmarks_fixed",
+            scale=self.fixed_spacing,
+            face_color=self._viewer_params.fixed_color,
+            border_color=self._viewer_params.pts_border_color,
+            border_width=self._viewer_params.pts_border_width,
+            border_width_is_relative=True,
+        )
+        pts_moving = viewer.add_points(
+            name="landmarks_moving",
+            scale=self.moving_spacing,
+            face_color=self._viewer_params.moving_color,
+            border_color=self._viewer_params.pts_border_color,
+            border_width=self._viewer_params.pts_border_width,
+            border_width_is_relative=True,
+        )
+
+        def update_pts_text(layer):
+            """Text update callback for points layers"""
+            layer.text = {
+                "string": [str(i + 1) for i in range(len(layer.data))],
+                "color": self._viewer_params.text_color,
+                "size": self._viewer_params.text_size,
+                "anchor": self._viewer_params.text_anchor,
+            }
+
+        # Connect to data change events
+        pts_fixed.events.data.connect(lambda e: update_pts_text(pts_fixed))
+        pts_moving.events.data.connect(lambda e: update_pts_text(pts_moving))
+
+        # Initialize
+        update_pts_text(pts_fixed)
+        update_pts_text(pts_moving)
+
+        _napari_blocking_run(viewer)
+
+        return pts_fixed.data, pts_moving.data
+
     def show_registered(self):
         """Show the resampled image overlaid to the fixed image"""
 
@@ -277,3 +277,38 @@ class NapariRegistrator:
             colormap=self._viewer_params.moving_color,
             scale=self.fixed_spacing,
         )
+
+        _napari_blocking_run(viewer)
+
+
+def _napari_blocking_run(viewer: napari.Viewer) -> None:
+    """
+    Create a napari blocking run that works for both scripts and interactive envs.
+
+    napari.run() is non-blocking in Jupyter/IPython environments where the Qt event loop
+    is already managed by IPython (%gui qt). Mirror napari's own internal check and
+    block explicitly via a local QEventLoop until the viewer window is destroyed.
+
+    Parameters
+    ----------
+    viewer : napari.Viewer
+        The napari Viewer object to control.
+    """
+    napari.run()
+
+    ipy = sys.modules.get("IPython")
+    if (
+        ipy
+        and (shell := ipy.get_ipython())
+        and getattr(shell, "active_eventloop", None) == "qt"
+    ):
+        from qtpy.QtCore import QEventLoop
+
+        loop = QEventLoop()
+        viewer.window._qt_window.destroyed.connect(loop.quit)
+
+        try:
+            loop.exec_()
+        except RuntimeError:
+            # Ignore Qt cleanup race condition
+            pass
