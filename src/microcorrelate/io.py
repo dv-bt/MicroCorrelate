@@ -50,19 +50,21 @@ def create_itk_image(
 
     Examples
     --------
-    >>> import numpy as np
-    >>> from microcorrelate.utils import create_itk_image
-    >>>
-    >>> # Create from HDF5 array
-    >>> import h5py
-    >>> with h5py.File('data.h5', 'r') as f:
-    >>>     array = f['images/layer1'][:]
-    >>>     image = create_itk_image(array, spacing=0.5)
-    >>>
-    >>> # Create from zarr array
-    >>> import zarr
-    >>> z = zarr.open('data.zarr', mode='r')
-    >>> image = create_itk_image(z['images/0'][:], spacing=1.2)
+    .. code-block:: python
+
+        import numpy as np
+        from microcorrelate.utils import create_itk_image
+
+        # Create from HDF5 array
+        import h5py
+        with h5py.File('data.h5', 'r') as f:
+            array = f['images/layer1'][:]
+            image = create_itk_image(array, spacing=0.5)
+
+        # Create from zarr array
+        import zarr
+        z = zarr.open('data.zarr', mode='r')
+        image = create_itk_image(z['images/0'][:], spacing=1.2)
     """
     if np.isscalar(spacing):
         spacing = (spacing, spacing)
