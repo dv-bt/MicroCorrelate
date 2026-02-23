@@ -280,6 +280,14 @@ class NapariRegistrator:
 
     def _create_viewer(self) -> napari.Viewer:
         """Create napari viewer with plugin warnings suppressed."""
+        # Suppress Qt platform screen-mapping warnings
+        try:
+            from qtpy.QtCore import QLoggingCategory
+
+            QLoggingCategory.setFilterRules("qt.qpa.screen*=false")
+        except (ImportError, AttributeError):
+            pass
+
         # Suppress output logging for napari plugins with incorrect schemas.
         # This is safe for our use case since they are not used.
         suppress = ["npe2.manifest.schema", "npe2.manifest", "npe2", "napari"]
@@ -405,11 +413,10 @@ def _napari_blocking_run(viewer: napari.Viewer) -> None:
     ):
         from qtpy.QtCore import QEventLoop
 
-        loop = QEventLoop()
-        viewer.window._qt_window.destroyed.connect(loop.quit)
-
         try:
+            loop = QEventLoop()
+            viewer.window._qt_window.destroyed.connect(loop.quit)
             loop.exec_()
         except RuntimeError:
-            # Ignore Qt cleanup race condition
+            # Window may already be destroyed (display change or Qt cleanup race)
             pass
