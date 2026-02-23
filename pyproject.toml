@@ -1,6 +1,6 @@
 [project]
 name = "microcorrelate"
-version = "0.1.1"
+version = "0.2.0"
 description = "A simple Python library for handling correlative microscopy datasets"
 authors = [
     {name = "dv-bt",email = "d.bottone@pm.me"}
@@ -47,7 +47,7 @@ requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.bumpver]
-current_version = "0.1.1"
+current_version = "0.2.0"
 version_pattern = "MAJOR.MINOR.PATCH"
 commit_message = "Bump version: {old_version} -> {new_version}"
 tag_message = "v{new_version}"
