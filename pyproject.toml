@@ -54,7 +54,7 @@ tag_message = "v{new_version}"
 tag_name = "v{new_version}"
 commit = true
 tag = true
-push = false
+push = true
 
 [tool.bumpver.file_patterns]
 "pyproject.toml" = [
