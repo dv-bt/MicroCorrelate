@@ -29,30 +29,9 @@ jobs:
           name: dist
           path: dist/
 
-  publish-testpypi:
-    name: Publish to TestPyPI
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/p/microcorrelate
-    permissions:
-      id-token: write
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-
-      - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@v1.12.3
-        with:
-          repository-url: https://upload.test.pypi.org/legacy/
-
   publish-pypi:
     name: Publish to PyPI
-    needs: [build, publish-testpypi]
+    needs: build
     runs-on: ubuntu-latest
     environment:
       name: pypi
