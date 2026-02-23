@@ -29,6 +29,7 @@ pytest-cov = "^6.1.1"
 ruff = "^0.11.7"
 pre-commit = "^4.2.0"
 pytest = "^8.4.1"
+bumpver = ">=2023.1129"
 
 
 [tool.poetry.group.notebooks.dependencies]
@@ -44,3 +45,18 @@ myst-parser = ">=4.0"
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.bumpver]
+current_version = "0.1.1"
+version_pattern = "MAJOR.MINOR.PATCH"
+commit_message = "Bump version: {old_version} -> {new_version}"
+tag_message = "v{new_version}"
+tag_name = "v{new_version}"
+commit = true
+tag = true
+push = false
+
+[tool.bumpver.file_patterns]
+"pyproject.toml" = [
+    'version = "{version}"',
+]

@@ -1,11 +1,11 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+from importlib.metadata import version as _get_version
 
 project = "MicroCorrelate"
 author = "dv-bt"
-release = "0.1.1"
+try:
+    release = _get_version("microcorrelate")
+except Exception:
+    release = "dev"
 copyright = f"2026, {author}"
 
 extensions = [
@@ -36,6 +36,7 @@ html_theme_options = {
     "show_toc_level": 2,
 }
 html_static_path = ["_static"]
+html_baseurl = "https://dv-bt.github.io/MicroCorrelate/"
 
 exclude_patterns = ["_build"]
 

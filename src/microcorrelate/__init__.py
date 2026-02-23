@@ -1,1 +1,6 @@
-# This file is intentionally left blank to make the src directory a package.
+from importlib.metadata import version, PackageNotFoundError
+
+try:
+    __version__ = version("microcorrelate")
+except PackageNotFoundError:
+    __version__ = "unknown"
