@@ -9,5 +9,5 @@ Visit the [MicroCorrelate website](https://dv-bt.github.io/MicroCorrelate/) for 
 We recommend installing the package in a fresh environment. The package and be isntalled by running:
 
 ```bash
-pip install microcorrelated
+pip install microcorrelate
 ```
