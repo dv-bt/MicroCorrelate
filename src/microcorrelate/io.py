@@ -236,6 +236,39 @@ def read_ome_zarr(zarr_path: Path | str) -> tuple[np.ndarray, tuple[float, float
     return data, spacing
 
 
+def read_tofsims(filepath: Path) -> tuple[np.ndarray, tuple[float, float]]:
+    """Read ToF-SIMS measurement and returns image data and spacing.
+
+    Parameters
+    ----------
+    filepath : Path
+        Path to the txt file containing the ToF-SIMS data.
+
+    Returns
+    -------
+    data : np.ndarray
+        Single channel image array.
+    spacing : tuple[float, float]
+        Pixel spacing in micrometers (Y, X).
+    """
+
+    pattern = re.compile(r"([\d.e+-]+) x ([\d.e+-]+)")
+    with open(filepath, "r") as f:
+        for line in f:
+            if not line.startswith("#"):
+                break
+            elif line.startswith("# Field of View"):
+                x_fov, y_fov = map(float, re.search(pattern, line).groups())
+            elif line.startswith("# Image Size"):
+                x_shape, y_shape = map(int, re.search(pattern, line).groups())
+
+    spacing = (x_fov / x_shape, y_fov / y_shape)
+
+    data_raw = np.loadtxt(filepath, comments="#")
+    data = data_raw[:, 2].reshape((y_shape, x_shape))
+    return data, spacing
+
+
 def extract_tpef_spacing(filepath: Path | str) -> tuple[float, float]:
     """
     Extract YX spacing values for a TPEF experiment.
