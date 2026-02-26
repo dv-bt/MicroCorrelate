@@ -23,6 +23,7 @@ from microcorrelate.utils import (
     vprint,
     find_common_vals,
     flatten_dict,
+    get_crop_idx,
 )
 
 
@@ -92,6 +93,9 @@ def stitch_images(
     vprint("Saving image...", verbose)
     for image_path in tqdm(tile_list, "Stitching tiles", disable=not verbose):
         image_stitch = _stitch_tile(image_stitch, image_path, tile_shape)
+
+    # Crop black borders, if present
+    image_stitch = image_stitch[get_crop_idx(image_stitch > 0)]
 
     if dest_path.suffix in [".tif", ".tiff"]:
         acquisition_metadata = _get_acquisition_metadata(pyramid_path, verbose)
@@ -266,7 +270,7 @@ def _save_stitch_zarr(
     )
 
     storage_options = [
-        {"chunks": zarr_chunks, "compressors": compressor, "dtype": np.float32}
+        {"chunks": zarr_chunks, "compressors": compressor}
     ] * pyramid_levels
     axes = [
         {"name": "y", "type": "space", "unit": "nanometer"},
