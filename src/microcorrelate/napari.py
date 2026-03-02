@@ -64,10 +64,12 @@ class NapariRegistrator:
         Reference image. The moving image will be registered onto this grid.
     moving_data : np.ndarray
         Moving image to be registered.
-    fixed_spacing : tuple[float, float]
-        Pixel pitch of the fixed image (row, col) in physical units.
-    moving_spacing : tuple[float, float]
-        Pixel pitch of the moving image (row, col) in physical units.
+    fixed_spacing : tuple[float, ...]
+        Pixel pitch of the fixed image in physical units. Use a 2-tuple
+        ``(row, col)`` for 2D images and a 3-tuple ``(z, y, x)`` for 3D.
+    moving_spacing : tuple[float, ...]
+        Pixel pitch of the moving image in physical units. Use a 2-tuple
+        ``(row, col)`` for 2D images and a 3-tuple ``(z, y, x)`` for 3D.
     transform_type : {"affine", "rigid", "similarity"}, optional
         Type of spatial transform to estimate. Default is ``"affine"``.
     fixed_channel_axis : int, optional
@@ -126,8 +128,8 @@ class NapariRegistrator:
         self,
         fixed_data: np.ndarray,
         moving_data: np.ndarray,
-        fixed_spacing: tuple[float, float],
-        moving_spacing: tuple[float, float],
+        fixed_spacing: tuple[float, ...],
+        moving_spacing: tuple[float, ...],
         transform_type: Literal["affine", "rigid", "similarity"] = "affine",
         fixed_channel_axis: int | None = None,
         moving_channel_axis: int | None = None,
@@ -143,8 +145,10 @@ class NapariRegistrator:
         self.moving_spacing = moving_spacing
         self.moving_channel_axis = moving_channel_axis
 
+        self._ndim = self.fixed_image.GetDimension()
+
         self.transform_type = transform_type
-        self.transform = _get_transform_function(transform_type)
+        self.transform = _get_transform_function(transform_type, self._ndim)
         self.resampled_data = np.zeros(shape=fixed_data.shape, dtype=moving_data.dtype)
 
         self._viewer_params = viewer_params if viewer_params else ViewerParams()
@@ -213,17 +217,22 @@ class NapariRegistrator:
                 f"vs {len(pts_moving)} moving points"
             )
 
-        if len(pts_fixed) < 3:
+        # 2D affine requires ≥3 points; 3D affine requires ≥4 non-coplanar points
+        min_points = 3 if self._ndim == 2 else 4
+        if len(pts_fixed) < min_points:
             raise ValueError(
-                f"At least 3 landmark pairs required, got {len(pts_fixed)}"
+                f"At least {min_points} landmark pairs required for {self._ndim}D "
+                f"registration, got {len(pts_fixed)}"
             )
 
+        # napari returns (row, col) in 2D or (z, y, x) in 3D;
+        # ITK expects (x, y) or (x, y, z) — [::-1] reversal handles both correctly
         moving_phys = (
             (pts_moving[:, ::-1] * self.moving_spacing[::-1]).flatten().tolist()
         )
         fixed_phys = (pts_fixed[:, ::-1] * self.fixed_spacing[::-1]).flatten().tolist()
 
-        transform = _get_transform_function(self.transform_type)
+        transform = _get_transform_function(self.transform_type, self._ndim)
         transform = sitk.LandmarkBasedTransformInitializer(
             transform, fixed_phys, moving_phys
         )
@@ -233,7 +242,7 @@ class NapariRegistrator:
     def register_image(
         self,
         moving_array: np.ndarray,
-        moving_spacing: tuple[float, float],
+        moving_spacing: tuple[float, ...],
         moving_channel_axis: int | None = None,
         default_value: float = 0.0,
     ) -> np.ndarray:
@@ -244,8 +253,9 @@ class NapariRegistrator:
         ----------
         moving_array : np.ndarray
             Moving image array.
-        moving_spacing : Tuple[float, float]
-            Moving image pixel pitch (row, col).
+        moving_spacing : tuple[float, ...]
+            Moving image pixel pitch. Use ``(row, col)`` for 2D or
+            ``(z, y, x)`` for 3D.
         moving_channel_axis : int | None
             Index of the channel axis of the moving image, if present. If None, the
             image is treated as single channel.

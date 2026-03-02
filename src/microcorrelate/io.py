@@ -15,8 +15,8 @@ from ome_zarr.reader import Reader
 
 def create_itk_image(
     image: np.ndarray,
-    spacing: float | tuple[float, float] = (1.0, 1.0),
-    origin: tuple[float, float] = (0.0, 0.0),
+    spacing: float | tuple[float, ...] = (1.0, 1.0),
+    origin: tuple[float, ...] = (0.0, 0.0),
     channel_axis: int | None = None,
 ) -> sitk.Image:
     """Convert a NumPy array to a SimpleITK Image.
@@ -34,8 +34,9 @@ def create_itk_image(
     image : np.ndarray
         The input image as a NumPy array.
     spacing : float | tuple of float, optional
-        The pixel spacing in physical units. For isotropic images, this
-        is the distance between pixel centers. Default is (1.0, 1.0).
+        The pixel spacing in physical units. A scalar is expanded to match
+        the spatial dimensionality of the image. Default is (1.0, 1.0) for
+        2D images.
     origin : tuple of float, optional
         The physical coordinates of the origin (0,0) pixel. Default is (0.0, 0.0).
     channel_axis : int | None, optional
@@ -67,7 +68,8 @@ def create_itk_image(
         image = create_itk_image(z['images/0'][:], spacing=1.2)
     """
     if np.isscalar(spacing):
-        spacing = (spacing, spacing)
+        spatial_ndim = image.ndim - (1 if channel_axis is not None else 0)
+        spacing = tuple([float(spacing)] * spatial_ndim)
 
     multichannel = channel_axis is not None
 

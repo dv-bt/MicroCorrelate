@@ -16,52 +16,76 @@ from skimage.util import compare_images
 
 def _get_transform_function(
     transform_type: Literal["affine", "rigid", "similarity"],
+    ndim: int = 2,
 ) -> sitk.Transform:
     """Get the SimpleITK transform function from the transform type string."""
-    if transform_type == "affine":
-        return sitk.AffineTransform(2)
-    elif transform_type == "rigid":
-        return sitk.Euler2DTransform()
-    elif transform_type == "similarity":
-        return sitk.Similarity2DTransform()
+    if ndim == 2:
+        if transform_type == "affine":
+            return sitk.AffineTransform(2)
+        elif transform_type == "rigid":
+            return sitk.Euler2DTransform()
+        elif transform_type == "similarity":
+            return sitk.Similarity2DTransform()
+        else:
+            raise ValueError("Invalid transform type")
+    elif ndim == 3:
+        if transform_type == "affine":
+            return sitk.AffineTransform(3)
+        elif transform_type == "rigid":
+            return sitk.Euler3DTransform()
+        elif transform_type == "similarity":
+            return sitk.Similarity3DTransform()
+        else:
+            raise ValueError("Invalid transform type")
     else:
-        raise ValueError("Invalid transform type")
+        raise ValueError(f"Unsupported dimensionality: {ndim}. Must be 2 or 3.")
 
 
 def _create_rotation_transform(
-    angle_degrees: float,
+    angle_degrees: float | tuple[float, float, float],
     image: sitk.Image,
-) -> sitk.Euler2DTransform:
+) -> sitk.Euler2DTransform | sitk.Euler3DTransform:
     """
-    Create a 2D rotation transform centered on the image center.
+    Create a rotation transform centered on the image center.
 
     Parameters
     ----------
-    angle_degrees : float
-        Rotation angle in degrees (counterclockwise, following standard
-        mathematical convention).
+    angle_degrees : float or tuple[float, float, float]
+        For 2D: a single rotation angle in degrees (counterclockwise).
+        For 3D: a tuple ``(rx, ry, rz)`` of rotation angles in degrees around
+        the X, Y, and Z axes respectively.
     image : sitk.Image
         Reference image used to determine the rotation center.
 
     Returns
     -------
-    sitk.Euler2DTransform
+    sitk.Euler2DTransform or sitk.Euler3DTransform
         Rotation transform configured to rotate around the image center.
     """
-    transform = sitk.Euler2DTransform()
-
-    # Calculate image center in physical coordinates
+    ndim = image.GetDimension()
     size = image.GetSize()
     spacing = image.GetSpacing()
     origin = image.GetOrigin()
 
-    center = [
-        origin[i] + (size[i] - 1) * spacing[i] / 2.0
-        for i in range(2)  # 2D only
-    ]
+    center = [origin[i] + (size[i] - 1) * spacing[i] / 2.0 for i in range(ndim)]
 
-    transform.SetCenter(center)
-    transform.SetAngle(np.deg2rad(angle_degrees))
+    if ndim == 2:
+        transform = sitk.Euler2DTransform()
+        transform.SetCenter(center)
+        transform.SetAngle(np.deg2rad(angle_degrees))
+    else:
+        if not isinstance(angle_degrees, (tuple, list)) or len(angle_degrees) != 3:
+            raise ValueError(
+                "For 3D rotation, angle_degrees must be a tuple of 3 angles "
+                "(rx, ry, rz) in degrees."
+            )
+        transform = sitk.Euler3DTransform()
+        transform.SetCenter(center)
+        transform.SetRotation(
+            np.deg2rad(angle_degrees[0]),
+            np.deg2rad(angle_degrees[1]),
+            np.deg2rad(angle_degrees[2]),
+        )
 
     return transform
 
@@ -73,18 +97,20 @@ def register_images(
     num_histogram_bins: int = 50,
     learning_rate: float = 1.0,
     max_iterations: int = 200,
-    initial_rotation: float | None = None,
+    initial_rotation: float | tuple[float, float, float] | None = None,
 ) -> sitk.Transform:
     """Register two images using SimpleITK. The fixed image is the reference image to
     which the moving image is registered. Currently supported transformations are
     affine, rigid, and similarity. The registration is performed using the Mattes
     mutual information metric and gradient descent with line search optimization.
+    Both 2D and 3D images are supported; dimensionality is inferred automatically
+    from the input images.
 
     Parameters
     ----------
-    fixed_image : np.ndarray
+    fixed_image : sitk.Image
         Fixed image in the registration.
-    moving_image : np.ndarray
+    moving_image : sitk.Image
         Moving image to register to the fixed image.
     transform_function : str
         Type of transformation to use. Options are 'affine', 'rigid', and 'similarity'.
@@ -107,10 +133,12 @@ def register_images(
 
     """
 
+    ndim = fixed_image.GetDimension()
+
     initial_transform = sitk.CenteredTransformInitializer(
         sitk.Cast(fixed_image, moving_image.GetPixelID()),
         moving_image,
-        _get_transform_function(transform_function),
+        _get_transform_function(transform_function, ndim),
         sitk.CenteredTransformInitializerFilter.GEOMETRY,
     )
 
@@ -137,11 +165,11 @@ def register_images(
     registration_method.SetOptimizerScalesFromPhysicalShift()
 
     # Set the initial moving and optimized transforms.
-    optimized_transform = _get_transform_function(transform_function)
+    optimized_transform = _get_transform_function(transform_function, ndim)
 
     if manual_transform is not None:
         # Compose manual rotation with centered initializer
-        pre_optimization_transform = sitk.CompositeTransform(2)
+        pre_optimization_transform = sitk.CompositeTransform(ndim)
         pre_optimization_transform.AddTransform(manual_transform)
         pre_optimization_transform.AddTransform(initial_transform)
         registration_method.SetMovingInitialTransform(pre_optimization_transform)
@@ -211,7 +239,7 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
         learning_rate: float = 1.0,
         max_iterations: int = 200,
         plot_metrics: bool = True,
-        initial_rotation: float | None = None,
+        initial_rotation: float | tuple[float, float, float] | None = None,
     ):
         super().__init__()
 
@@ -247,7 +275,7 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
         self,
         fixed_image: sitk.Image,
         moving_image: sitk.Image,
-        initial_rotation: float | None = None,
+        initial_rotation: float | tuple[float, float, float] | None = None,
     ) -> None:
         """
         Register moving image to fixed image.
@@ -258,20 +286,22 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
             Reference image.
         moving_image : sitk.Image
             Image to be registered.
-        initial_rotation : float or None
-            Initial rotation angle in degrees. If provided, overrides the
-            initial_rotation set in __init__. If None, uses the value from
-            __init__. Default is None.
+        initial_rotation : float or tuple[float, float, float] or None
+            Initial rotation angle(s) in degrees. For 2D, a single float. For 3D,
+            a tuple ``(rx, ry, rz)``. If provided, overrides the initial_rotation
+            set in __init__. If None, uses the value from __init__. Default is None.
         """
         # Use method parameter if provided, otherwise use instance variable
         rotation = (
             initial_rotation if initial_rotation is not None else self.initial_rotation
         )
 
+        ndim = fixed_image.GetDimension()
+
         initial_transform = sitk.CenteredTransformInitializer(
             sitk.Cast(fixed_image, moving_image.GetPixelID()),
             moving_image,
-            _get_transform_function(self.transform_function),
+            _get_transform_function(self.transform_function, ndim),
             sitk.CenteredTransformInitializerFilter.GEOMETRY,
         )
 
@@ -283,11 +313,11 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
                 moving_image,
             )
 
-        optimized_transform = _get_transform_function(self.transform_function)
+        optimized_transform = _get_transform_function(self.transform_function, ndim)
 
         if manual_transform is not None:
             # Compose manual rotation with centered initializer
-            pre_optimization_transform = sitk.CompositeTransform(2)
+            pre_optimization_transform = sitk.CompositeTransform(ndim)
             pre_optimization_transform.AddTransform(manual_transform)
             pre_optimization_transform.AddTransform(initial_transform)
             self.SetMovingInitialTransform(pre_optimization_transform)
@@ -317,6 +347,8 @@ class ImageRegistration(sitk.ImageRegistrationMethod):
         self, fixed_image: sitk.Image, moving_image: sitk.Image
     ) -> None:
         """Plot image comparison at the end of registration"""
+        if fixed_image.GetDimension() != 2:
+            return  # checkerboard comparison only supported for 2D images
         resample = sitk.ResampleImageFilter()
         resample.SetReferenceImage(fixed_image)
         resample.SetInterpolator(sitk.sitkLinear)
