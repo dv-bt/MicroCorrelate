@@ -139,6 +139,7 @@ def read_tpef(
 
 def read_laicp_hdf5(
     filepath: Path | str,
+    elements: list[str] | None = None,
 ) -> tuple[np.ndarray, tuple[float, float], list[str]]:
     """
     Read LA-ICP-MS data from a TOFWERK HDF5 file.
@@ -150,12 +151,19 @@ def read_laicp_hdf5(
     ----------
     filepath : Path | str
         Path to the HDF5 file.
+    elements : list[str] | None, optional
+        Element names to search for in channel labels (e.g. ``['Cu', 'Zn']``).
+        Channels whose label contains any of these names are included in
+        addition to TIC and user-selected channels (ending with ``'\\n'``).
+        Only channels before the padding region are searched.
+        If ``None``, no element-based filtering is applied.
 
     Returns
     -------
     data : np.ndarray
-        Image array of shape (n_channels, rows, cols). Only user selected channels
-        (ending with ``'\\n'`` in the channel labels) and total ion count are kept.
+        Image array of shape (n_channels, rows, cols). Total ion count,
+        user-selected channels (ending with ``'\\n'``), and any element-matched
+        channels are kept.
     spacing : tuple[float, float]
         Pixel spacing in micrometers (row, col).
     labels : list[str]
@@ -171,12 +179,24 @@ def read_laicp_hdf5(
 
     labels = [lab[0].decode("utf-8") for lab in raw_labels]
 
-    # Keep TIC (first channel) and user-selected channels (ending with \n)
+    # Find the index where padding channels begin
+    padding_start = len(labels)
+    for i, lab in enumerate(labels[1:], start=1):
+        if lab.startswith("padding"):
+            padding_start = i
+            break
+
+    # Always keep TIC (first channel)
     keep_idx = [0]
     keep_labels = [labels[0]]
 
-    for i, lab in enumerate(labels[1:], start=1):
-        if lab.endswith("\n") and not lab.startswith("padding"):
+    # Keep user-selected channels (ending with \n) and element-matched channels
+    for i in range(1, padding_start):
+        lab = labels[i]
+        add = lab.endswith("\n")
+        if not add and elements is not None:
+            add = any(elem in lab for elem in elements)
+        if add:
             keep_idx.append(i)
             keep_labels.append(lab.strip())
 
