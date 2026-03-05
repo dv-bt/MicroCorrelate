@@ -135,6 +135,7 @@ class NapariRegistrator:
     ) -> None:
         self.fixed_data = fixed_data
         self.fixed_spacing = fixed_spacing
+        self.fixed_channel_axis = fixed_channel_axis
         self.fixed_image = create_itk_image(
             fixed_data, spacing=fixed_spacing, channel_axis=fixed_channel_axis
         )
@@ -142,7 +143,6 @@ class NapariRegistrator:
         self.moving_data = moving_data
         self.moving_spacing = moving_spacing
         self.moving_channel_axis = moving_channel_axis
-        self.fixed_channel_axis = fixed_channel_axis
 
         self.transform_type = transform_type
         self.transform = _get_transform_function(transform_type)
@@ -324,14 +324,12 @@ class NapariRegistrator:
             name="image_fixed",
             colormap=self._viewer_params.fixed_color,
             scale=self.fixed_spacing,
-            channel_axis=self.fixed_channel_axis,
         )
         viewer.add_image(
             self.moving_data,
             name="image_moving",
             colormap=self._viewer_params.moving_color,
             scale=self.moving_spacing,
-            channel_axis=self.moving_channel_axis,
         )
 
         pts_fixed = viewer.add_points(
@@ -382,14 +380,12 @@ class NapariRegistrator:
             name="image_fixed",
             colormap=self._viewer_params.fixed_color,
             scale=self.fixed_spacing,
-            channel_axis=self.fixed_channel_axis,
         )
         viewer.add_image(
             self.resampled_data,
             name="image_registered",
             colormap=self._viewer_params.moving_color,
             scale=self.fixed_spacing,
-            channel_axis=self.moving_channel_axis,
         )
 
         _napari_blocking_run(viewer)
