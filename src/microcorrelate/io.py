@@ -139,7 +139,8 @@ def read_tpef(
 
 def read_laicp_hdf5(
     filepath: Path | str,
-    elements: list[str] | None = None,
+    elements: list[str] | str | None = None,
+    quant_suffix: str = "\n",
 ) -> tuple[np.ndarray, tuple[float, float], list[str]]:
     """
     Read LA-ICP-MS data from a TOFWERK HDF5 file.
@@ -151,12 +152,13 @@ def read_laicp_hdf5(
     ----------
     filepath : Path | str
         Path to the HDF5 file.
-    elements : list[str] | None, optional
+    elements : list[str] | str | None, optional
         Element names to search for in channel labels (e.g. ``['Cu', 'Zn']``).
         Channels whose label contains any of these names are included in
-        addition to TIC and user-selected channels (ending with ``'\\n'``).
-        Only channels before the padding region are searched.
+        addition to TIC and user-selected channels.
         If ``None``, no element-based filtering is applied.
+    quant_suffix : str
+        Suffix identifying user-defined quantification channels. Default is ``"\\n"``.
 
     Returns
     -------
@@ -179,28 +181,12 @@ def read_laicp_hdf5(
 
     labels = [lab[0].decode("utf-8") for lab in raw_labels]
 
-    # Find the index where padding channels begin
-    padding_start = len(labels)
-    for i, lab in enumerate(labels[1:], start=1):
-        if lab.startswith("padding"):
-            padding_start = i
-            break
-
-    # Always keep TIC (first channel)
-    keep_idx = [0]
-    keep_labels = [labels[0]]
-
-    # Keep user-selected channels (ending with \n) and element-matched channels
-    for i in range(1, padding_start):
-        lab = labels[i]
-        add = lab.endswith("\n")
-        if not add and elements is not None:
-            add = any(elem in lab for elem in elements)
-        if add:
-            keep_idx.append(i)
-            keep_labels.append(lab.strip())
+    keep_idx = select_laicp_channels(
+        channels=labels, elements=elements, quant_suffix=quant_suffix
+    )
 
     data = data[keep_idx]
+    keep_labels = [labels[i] for i in keep_idx]
 
     x, y = pos[:, 0], pos[:, 1]
     spacing = (np.diff(np.unique(y)).mean(), np.diff(np.unique(x)).mean())
@@ -334,3 +320,53 @@ def extract_tpef_spacing(filepath: Path | str) -> tuple[float, float]:
         )
 
     return (y_spacing, x_spacing)
+
+
+def select_laicp_channels(
+    channels: list[str],
+    elements: list[str] | str | None = None,
+    quant_suffix: str = "\n",
+) -> list[int]:
+    """Select relevant LA-ICP-MS channel indices from a list of channel labels.
+
+    This function assumes that the first channel represents the total ion count, and
+    that user-defined quantification channels have a suffix that identifies them.
+
+    Parameters
+    ----------
+    channels : list[str]
+        All channel names from the measurement.
+    elements : list[str] | None
+        Element symbols to retain (e.g. ``["Y", "N", "Ca"]``). If None, keep only
+        quantification channels. Default is None.
+    quant_suffix : str
+        Suffix identifying user-defined quantification channels. Default is ``"\\n"``.
+
+    Returns
+    -------
+    list[int]
+        Ordered, deduplicated indices of selected channels.
+    """
+
+    # First channel (total ion count)
+    indices = [0]
+
+    if elements is not None:
+        if isinstance(elements, str):
+            elements = [elements]
+        patterns = [
+            re.compile(rf"(?<![A-Za-z]){re.escape(el)}(?![a-z])") for el in elements
+        ]
+        indices += [
+            i
+            for i, ch in enumerate(channels[1:], 1)
+            if any(p.search(ch) for p in patterns) and i not in indices
+        ]
+
+    indices += [
+        i
+        for i, ch in enumerate(channels)
+        if ch.endswith(quant_suffix) and i not in indices
+    ]
+
+    return indices
