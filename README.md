@@ -6,7 +6,7 @@ Visit the [MicroCorrelate website](https://dv-bt.github.io/MicroCorrelate/) for 
 
 ## Installation
 
-We recommend installing the package in a fresh environment. The package and be isntalled by running:
+We recommend installing the package in a fresh environment. The package and be installed by running:
 
 ```bash
 pip install microcorrelate
