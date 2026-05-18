@@ -4,15 +4,11 @@ This module contains functions for stitching together microscopy images
 
 import re
 from pathlib import Path
-import json
-from typing import Any
-from dataclasses import dataclass
 
 import numpy as np
 import xmltodict
-from tifffile import TiffWriter, imread, TiffFile
+from tifffile import TiffWriter, imread
 from tqdm import tqdm
-from imageio.v3 import immeta
 import zarr
 from zarr.codecs import BloscCodec, BloscShuffle
 from ome_zarr.writer import write_image
@@ -21,28 +17,8 @@ from ome_zarr.scale import Scaler
 from microcorrelate.utils import (
     extract_integers,
     vprint,
-    find_common_vals,
-    flatten_dict,
     get_crop_idx,
 )
-
-
-@dataclass(frozen=True)
-class StitchConfig:
-    """Custom TIFF tag IDs used to store acquisition metadata in stitched images.
-
-    Attributes
-    ----------
-    tag_metadata_common : int
-        TIFF tag ID for the JSON-encoded metadata common to all acquired tiles.
-        Default is 65000.
-    tag_metadata_all : int
-        TIFF tag ID for the JSON-encoded per-tile acquisition metadata.
-        Default is 65001.
-    """
-
-    tag_metadata_common: int = 65000
-    tag_metadata_all: int = 65001
 
 
 def stitch_images(
@@ -98,10 +74,7 @@ def stitch_images(
     image_stitch = image_stitch[get_crop_idx(image_stitch > 0)]
 
     if dest_path.suffix in [".tif", ".tiff"]:
-        acquisition_metadata = _get_acquisition_metadata(pyramid_path, verbose)
-        _save_stitch_tiff(
-            dest_path, image_stitch, spacing, compression, acquisition_metadata
-        )
+        _save_stitch_tiff(dest_path, image_stitch, spacing, compression)
     elif dest_path.suffix == ".zarr":
         _save_stitch_zarr(
             dest_path,
@@ -201,12 +174,8 @@ def _save_stitch_tiff(
     image_stitch: np.ndarray,
     spacing: float,
     compression: bool,
-    acquisition_metadata: dict,
 ) -> None:
-    """Saves the stitched image. Acquisition metadata are saved in custom tiff tags as
-    JSON-formatted string. The actual tiff tags used are set in StitchConfig"""
-
-    metadata_common, metadata_all = _format_metadata(acquisition_metadata)
+    """Saves the stitched image as tiff."""
 
     # Convert spacing from m to µm
     spacing_um = tuple(i * 1e6 for i in spacing)
@@ -234,10 +203,6 @@ def _save_stitch_tiff(
             image_stitch,
             resolution=(1e4 / spacing_um[1], 1e4 / spacing_um[0]),
             metadata=metadata,
-            extratags=[
-                (StitchConfig.tag_metadata_common, 7, 1, metadata_common, True),
-                (StitchConfig.tag_metadata_all, 7, 1, metadata_all, True),
-            ],
             **options,
         )
 
@@ -302,102 +267,6 @@ def _get_multiscale_props(pyramid_levels: int, spacing_nm: tuple[int | float]) -
         scale_nm = [spacing_nm[0] * factor, spacing_nm[1] * factor]
         coordinate_transformations.append([{"type": "scale", "scale": scale_nm}])
     return coordinate_transformations
-
-
-def _find_orig_images(pyramid_path: Path) -> list[Path] | None:
-    """Find the path to the orignal images before stitching. This is useful because the
-    tiles in the Maps image pyramid don't have acquisition metadata. Returns none
-    if the directory is not found.
-    NOTE: for this to work, the stitched tile set should be named
-    'Tileset_name (stitched)' and the corresponding original tileset should be named
-    'Tileset_name'. This is the standard pattern produced by the software."""
-
-    pyramid_path = str(pyramid_path)
-    orig_path = pyramid_path[: pyramid_path.rfind(" (stitched)")]
-    orig_path = Path(orig_path)
-    if orig_path.exists():
-        return list(orig_path.glob("*.tif"))
-
-
-def _get_acquisition_metadata(pyramid_path: Path, verbose: bool = True) -> dict | None:
-    """Reads the acquisition metadata from the original images and returns it as a
-    dictionary where each entry is the metadata for one image.
-    If the directory was not found reading metadata is skipped and the
-    function returns None"""
-
-    orig_list = _find_orig_images(pyramid_path)
-
-    if not orig_list:
-        vprint(
-            "Original tileset not found. It could have been moved or renamed. "
-            "Skipped parsing acquisition metadata",
-            verbose,
-        )
-        return
-    metadata_all = {}
-    for image_path in tqdm(
-        orig_list, "Reading acquisition metadata", disable=not verbose
-    ):
-        metadata = immeta(image_path)
-        # Remove unnecessary keys introduced by imageio
-        metadata_clean = {
-            key: val
-            for key, val in metadata.items()
-            if ("is_" not in key) and (key != "byteorder")
-        }
-        metadata_all[image_path.name] = metadata_clean
-    return metadata_all
-
-
-def _find_common_metadata(metadata: dict[str, dict[str, Any]]) -> dict:
-    """Reduce metadata to a single common dictionary"""
-
-    metadata_list = [flatten_dict(val) for val in metadata.values()]
-    metadata_common = metadata_list[0]
-    for d in metadata_list[1:]:
-        metadata_common = find_common_vals(metadata_common, d)
-    return metadata_common
-
-
-def _format_metadata(metadata: dict[str, dict[str, Any]] | None) -> tuple[str, str]:
-    """Format acquisition metadata as two JSON-encoded byte strings.
-
-    Produces a common-metadata string (keys shared across all images) and a
-    per-image metadata string. Returns empty byte strings if ``metadata`` is
-    ``None`` or empty.
-    """
-
-    if not metadata:
-        return "", ""
-    metadata_common = json.dumps(_find_common_metadata(metadata)).encode("utf-8")
-    metadata_all = json.dumps(metadata).encode("utf-8")
-    return metadata_common, metadata_all
-
-
-def read_metadata(stitch_path: Path) -> tuple[dict, dict]:
-    """Read acquisition metadata from a stitched TIFF image.
-
-    Parameters
-    ----------
-    stitch_path : Path
-        Path to the stitched TIFF file produced by :func:`stitch_images`.
-
-    Returns
-    -------
-    metadata_common : dict
-        Metadata keys and values shared across all acquired tiles.
-    metadata_all : dict
-        Per-tile metadata, keyed by original filename.
-    """
-
-    def read_tag_json(tif: TiffFile, tag_id: int) -> dict:
-        """Read tag value and parse it as a json string"""
-        return json.loads(tif.pages[0].tags[tag_id].value)
-
-    with TiffFile(stitch_path) as tif:
-        metadata_common = read_tag_json(tif, StitchConfig.tag_metadata_common)
-        metadata_all = read_tag_json(tif, StitchConfig.tag_metadata_all)
-    return metadata_common, metadata_all
 
 
 def _get_scale_mapping(group: zarr.Group) -> dict[str, list[int | float]]:
