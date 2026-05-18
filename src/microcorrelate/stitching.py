@@ -4,15 +4,14 @@ This module contains functions for stitching together microscopy images
 
 import re
 from pathlib import Path
+from dataclasses import dataclass
+import xml.etree.ElementTree as ET
 
 import numpy as np
 import xmltodict
 from tifffile import TiffWriter, imread
 from tqdm import tqdm
-import zarr
-from zarr.codecs import BloscCodec, BloscShuffle
-from ome_zarr.writer import write_image
-from ome_zarr.scale import Scaler
+import ngff_zarr as nz
 
 from microcorrelate.utils import (
     extract_integers,
@@ -21,12 +20,141 @@ from microcorrelate.utils import (
 )
 
 
+class Length:
+    """A physical length with lossless unit conversion.
+
+    Stores a length in metres as the canonical representation and exposes
+    read-only properties for common unit conversions. Intended to eliminate
+    scattered unit conversion factors across the stitching pipeline.
+
+    Parameters
+    ----------
+    meters : float
+        Length in metres.
+
+    Examples
+    --------
+    .. code-block:: python
+
+        l = Length(1.5e-7)
+        l.m   # 1.5e-07
+        l.um  # 0.15
+        l.nm  # 150.0
+    """
+
+    def __init__(self, meters: float) -> None:
+        self._m = meters
+
+    @property
+    def m(self) -> float:
+        return self._m
+
+    @property
+    def cm(self) -> float:
+        return self._m * 1e2
+
+    @property
+    def mm(self) -> float:
+        return self._m * 1e3
+
+    @property
+    def um(self) -> float:
+        return self._m * 1e6
+
+    @property
+    def nm(self) -> float:
+        return self._m * 1e9
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Length):
+            return NotImplemented
+        return self._m == other._m
+
+    def __repr__(self) -> str:
+        return f"Length({self._m} m)"
+
+
+@dataclass(frozen=True)
+class PixelSize:
+    """Physical size of a single pixel.
+
+    Parameters
+    ----------
+    y : Length
+        Pixel size along the Y axis.
+    x : Length
+        Pixel size along the X axis.
+
+    Examples
+    --------
+    .. code-block:: python
+
+        pixel_size = PixelSize(y=Length(1.5e-7), x=Length(1.5e-7))
+        pixel_size.y.nm  # 150.0
+        pixel_size.x.um  # 0.15
+    """
+
+    y: Length
+    x: Length
+
+
+@dataclass(frozen=True)
+class StagePosition:
+    """Global stage coordinates of the top-left corner of a stitched tileset.
+
+    Coordinates are extracted from ``MapsProject.xml`` and converted from
+    the center-based convention used by Maps to top-left, so that pixel-to-physical
+    coordinate mapping is a direct offset from index ``[0, 0]``.
+    Units in the ``MapsProject.xml`` are assumed to be meters.
+
+    Parameters
+    ----------
+    y : Length
+        Stage Y coordinate of the top-left corner.
+    x : Length
+        Stage X coordinate of the top-left corner.
+
+    Examples
+    --------
+    .. code-block:: python
+
+        stage = StagePosition(y=Length(-0.020), x=Length(-0.011))
+        stage.x.um  # -11000.0
+        stage.y.nm  # -20000000.0
+    """
+
+    y: Length
+    x: Length
+
+
+@dataclass(frozen=True)
+class TilesetMetadata:
+    """Physical metadata of a Maps stitched tileset.
+
+    Aggregates pixel size and optional stage position into a single object returned by
+    ``_get_metadata``. Stage position is ``None`` when ``MapsProject.xml`` is
+    unavailable or the tileset cannot be matched.
+
+    Parameters
+    ----------
+    pixel_size : PixelSize
+        Physical size of a single pixel.
+    stage_position : StagePosition or None
+        Global stage coordinates of the top-left corner, or ``None`` if
+        unavailable.
+    """
+
+    pixel_size: PixelSize
+    stage_position: StagePosition | None
+
+
 def stitch_images(
     tileset_path: Path | str,
     dest_path: Path | str,
     compression: bool = True,
     group_path: str | None = None,
     pyramid_levels: int = 1,
+    crop_borders: bool = True,
     verbose: bool = False,
 ) -> None:
     """Stitch together tiled images from a tileset acquired via the Thermo Fisher Maps
@@ -50,6 +178,11 @@ def stitch_images(
     pyramid_levels : int
         Number or pyramid levels used when saving to Zarr multiscales. If 1, no
         downscaled levels are calculated. (default = 1).
+    crop_borders : bool
+        Crop black borders in the stitched dataset, which normally arise from a mismatch
+        in the tile size and image size used by Maps. Note that this will briefly cause
+        two copies of the image array to be held in memory, it should be used with
+        caution when operating close to memory limits. (default = True).
     verbose : bool
         Enable verbose output (default = False).
 
@@ -58,28 +191,36 @@ def stitch_images(
     None
 
     """
+    # Enforce Path type
+    tileset_path = Path(tileset_path)
+    dest_path = Path(dest_path)
+
     pyramid_path = _find_pyramid(tileset_path)
     vprint(f"Stitchig image at {pyramid_path}", verbose)
 
-    tile_shape, spacing = _get_metadata(pyramid_path)
-    vprint(f"Dataset spacing [m]: {spacing}", verbose)
-    image_stitch = _generate_empty_image(pyramid_path, tile_shape)
+    tile_shape, metadata = _get_metadata(pyramid_path)
+    vprint(
+        f"Dataset spacing [m]: ({metadata.pixel_size.x.m}, {metadata.pixel_size.y.m})",
+        verbose,
+    )
     tile_list = _get_tile_list(pyramid_path)
+    image_stitch = _generate_empty_image(pyramid_path, tile_shape)
 
     vprint("Saving image...", verbose)
     for image_path in tqdm(tile_list, "Stitching tiles", disable=not verbose):
         image_stitch = _stitch_tile(image_stitch, image_path, tile_shape)
 
     # Crop black borders, if present
-    image_stitch = image_stitch[get_crop_idx(image_stitch > 0)]
+    if crop_borders:
+        image_stitch, metadata = _crop_image(image=image_stitch, metadata=metadata)
 
     if dest_path.suffix in [".tif", ".tiff"]:
-        _save_stitch_tiff(dest_path, image_stitch, spacing, compression)
+        _save_stitch_tiff(dest_path, image_stitch, metadata, compression)
     elif dest_path.suffix == ".zarr":
         _save_stitch_zarr(
             dest_path,
             image_stitch,
-            spacing,
+            metadata,
             group_path=group_path,
             pyramid_levels=pyramid_levels,
         )
@@ -116,7 +257,13 @@ def _get_pyramid_level(pyramid_path: Path) -> str:
 def _get_tile_list(pyramid_path: Path) -> list[Path]:
     """Get list of file paths to the image tiles"""
     max_level = _get_pyramid_level(pyramid_path)
-    return list(pyramid_path.glob(f"{max_level}/*/tile*"))
+    tile_list = list(pyramid_path.glob(f"{max_level}/*/tile*"))
+    if tile_list == []:
+        raise FileNotFoundError(
+            f"No tiff tiles found under {str(pyramid_path)}\n",
+            "Tiles are expected to be in a data/level/column/tile_row.tif structure",
+        )
+    return tile_list
 
 
 def _generate_empty_image(
@@ -147,7 +294,7 @@ def _stitch_tile(
     return image_stitch
 
 
-def _get_metadata(pyramid_path: Path) -> tuple[tuple[int, int], tuple[float, float]]:
+def _get_metadata(pyramid_path: Path) -> tuple[tuple[int, int], TilesetMetadata]:
     """
     Get tileset metadata from the pyramid.xml file. Takes as argument the root of the
     image pyramid structure (not the path to the xml file!) and returns a tuple of
@@ -161,48 +308,67 @@ def _get_metadata(pyramid_path: Path) -> tuple[tuple[int, int], tuple[float, flo
         int(pyramid_metadata["imageset"]["@tileHeight"]),
         int(pyramid_metadata["imageset"]["@tileWidth"]),
     )
-    spacing = (
-        float(pyramid_metadata["metadata"]["pixelsize"]["y"]),
-        float(pyramid_metadata["metadata"]["pixelsize"]["x"]),
+    pixel_size = PixelSize(
+        y=Length(float(pyramid_metadata["metadata"]["pixelsize"]["y"])),
+        x=Length(float(pyramid_metadata["metadata"]["pixelsize"]["x"])),
     )
+    stage_position = _get_stage_position(pyramid_path=pyramid_path)
+    metadata = TilesetMetadata(pixel_size=pixel_size, stage_position=stage_position)
 
-    return tile_shape, spacing
+    return tile_shape, metadata
 
 
 def _save_stitch_tiff(
     dest_path: Path,
     image_stitch: np.ndarray,
-    spacing: float,
+    metadata: TilesetMetadata,
     compression: bool,
 ) -> None:
-    """Saves the stitched image as tiff."""
+    """Save the stitched image as an OME-TIFF file.
 
-    # Convert spacing from m to µm
-    spacing_um = tuple(i * 1e6 for i in spacing)
+    Physical pixel size is written as standard OME ``Pixels`` attributes.
+    If a stage position is available, it is written as an OME ``Plane``
+    position in micrometres.
 
-    metadata = {
+    Parameters
+    ----------
+    dest_path : Path
+        Output file path.
+    image_stitch : np.ndarray
+        Stitched image array.
+    metadata : TilesetMetadata
+        Physical metadata including pixel size and optional stage position.
+    compression : bool
+        Whether to apply zlib compression.
+    """
+    ome_metadata = {
         "axes": "YX",
-        "PhysicalSizeX": spacing_um[1],
+        "PhysicalSizeX": metadata.pixel_size.x.um,
         "PhysicalSizeXUnit": "µm",
-        "PhysicalSizeY": spacing_um[0],
+        "PhysicalSizeY": metadata.pixel_size.y.um,
         "PhysicalSizeYUnit": "µm",
     }
+    if metadata.stage_position is not None:
+        ome_metadata["Plane"] = {
+            "PositionX": metadata.stage_position.x.um,
+            "PositionXUnit": "µm",
+            "PositionY": metadata.stage_position.y.um,
+            "PositionYUnit": "µm",
+        }
+
     options = {
         "tile": (256, 256),
         "resolutionunit": "CENTIMETER",
         "maxworkers": 2,
     }
     if compression:
-        options.update(
-            compression="zlib",
-            compressionargs={"level": 6},
-            predictor=2,
-        )
+        options.update(compression="zlib", compressionargs={"level": 6}, predictor=2)
+
     with TiffWriter(dest_path, bigtiff=True) as tif:
         tif.write(
             image_stitch,
-            resolution=(1e4 / spacing_um[1], 1e4 / spacing_um[0]),
-            metadata=metadata,
+            resolution=(1 / metadata.pixel_size.x.cm, 1 / metadata.pixel_size.y.cm),
+            metadata=ome_metadata,
             **options,
         )
 
@@ -210,76 +376,236 @@ def _save_stitch_tiff(
 def _save_stitch_zarr(
     dest_path: Path,
     image_stitch: np.ndarray,
-    spacing: tuple[float, float],
+    metadata: TilesetMetadata,
     group_path: str | None = None,
-    zarr_chunks: tuple[int] = (512, 512),
+    zarr_chunks: tuple[int, int] = (512, 512),
     pyramid_levels: int = 1,
     pyramid_factor: int = 2,
-    pyramid_method: str = "gaussian",
 ) -> None:
-    """Saves the stitched image as a zarr file compatible with OME-NGFF v0.5
-    specifications"""
-    root = zarr.open_group(dest_path)
-    if group_path:
-        image_group = root.require_group(group_path)
-    else:
-        image_group = root
+    """Save the stitched image as an OME-NGFF v0.5 Zarr file.
 
-    # Convert spacing from m to nm
-    spacing_nm = tuple(i * 1e9 for i in spacing)
+    Physical pixel size and stage position are written as standard OME-NGFF
+    scale and translation coordinate transformations in nanometres.
+    If ``group_path`` is provided, the image is written to a subgroup of the
+    store, allowing multiple OME-NGFF images to coexist in a single store.
 
-    compressor = BloscCodec(cname="zstd", clevel=3, shuffle=BloscShuffle.bitshuffle)
-
-    scaler = Scaler(
-        downscale=pyramid_factor, max_layer=pyramid_levels - 1, method=pyramid_method
+    Parameters
+    ----------
+    dest_path : Path
+        Output Zarr store path.
+    image_stitch : np.ndarray
+        Stitched image array.
+    metadata : TilesetMetadata
+        Physical metadata including pixel size and optional stage position.
+    group_path : str or None
+        Path to a subgroup within the store. Each subgroup is a self-contained
+        OME-NGFF image. If None, writes to the root of the store.
+    zarr_chunks : tuple of int
+        Chunk shape for the Zarr arrays. Default is ``(512, 512)``.
+    pyramid_levels : int
+        Number of multiscale pyramid levels. Default is 1.
+    pyramid_factor : int
+        Downscale factor between pyramid levels. Default is 2.
+    """
+    translation = (
+        {"y": metadata.stage_position.y.nm, "x": metadata.stage_position.x.nm}
+        if metadata.stage_position is not None
+        else None
     )
 
-    storage_options = [
-        {"chunks": zarr_chunks, "compressors": compressor}
-    ] * pyramid_levels
-    axes = [
-        {"name": "y", "type": "space", "unit": "nanometer"},
-        {"name": "x", "type": "space", "unit": "nanometer"},
-    ]
-    coordinate_transforms = _get_multiscale_props(pyramid_levels, spacing_nm)
-
-    write_image(
-        image=image_stitch.astype(np.float32),
-        group=image_group,
-        scaler=scaler,
-        axes=axes,
-        coordinate_transformations=coordinate_transforms,
-        storage_options=storage_options,
+    image = nz.to_ngff_image(
+        data=image_stitch,
+        dims=["y", "x"],
+        scale={"y": metadata.pixel_size.y.nm, "x": metadata.pixel_size.x.nm},
+        translation=translation,
+        axes_units={"y": "nanometer", "x": "nanometer"},
     )
 
-    # Add spacing to array attributes
-    scale_mapping = _get_scale_mapping(image_group)
-    for arr_key, arr_spacing in scale_mapping.items():
-        array = image_group.get(arr_key)
-        array.attrs["spacing"] = arr_spacing
+    multiscales = nz.to_multiscales(
+        image,
+        scale_factors=[pyramid_factor**i for i in range(1, pyramid_levels)],
+    )
+
+    store = str(dest_path / group_path) if group_path else str(dest_path)
+    nz.to_ngff_zarr(store, multiscales, chunks=zarr_chunks)
 
 
-def _get_multiscale_props(pyramid_levels: int, spacing_nm: tuple[int | float]) -> list:
-    """Get multiscale scales and coordinate transformations"""
-    coordinate_transformations = []
-    for level_index in range(pyramid_levels):
-        factor = 2**level_index
-        scale_nm = [spacing_nm[0] * factor, spacing_nm[1] * factor]
-        coordinate_transformations.append([{"type": "scale", "scale": scale_nm}])
-    return coordinate_transformations
+def _get_tileset_guid(pyramid_path: Path) -> str | None:
+    xml_path = pyramid_path.parents[1] / "MultiChannelParams.xml"
+    if not xml_path.exists():
+        return None
+    with open(xml_path, "rb") as f:
+        data = xmltodict.parse(f)["MultiChannelParameters"]
+    guid = data.get("Channel", {}).get("Guid")
+    return guid.strip() if guid is not None else None
 
 
-def _get_scale_mapping(group: zarr.Group) -> dict[str, list[int | float]]:
-    """Get scale mappings from zarr group containing OME multiscales"""
+def _find_maps_project(start_path: Path, max_levels: int = 6) -> Path | None:
+    """Walk up the directory tree to find MapsProject.xml.
 
-    def get_scale(dataset: dict) -> list[int | float]:
-        """Get scale from dataset"""
-        transforms = dataset["coordinateTransformations"]
-        for transform in transforms:
-            if transform["type"] == "scale":
-                return transform["scale"]
-        return []
+    Parameters
+    ----------
+    start_path : Path
+        Directory to start searching from.
+    max_levels : int
+        Maximum number of parent directories to search. Default is 6.
 
-    multiscales = group.attrs["ome"]["multiscales"]
-    datasets = multiscales[0]["datasets"]
-    return {i["path"]: get_scale(i) for i in datasets}
+    Returns
+    -------
+    Path | None
+        Path to MapsProject.xml, or None if not found within ``max_levels``.
+    """
+    current = start_path
+    for _ in range(max_levels):
+        candidate = current / "MapsProject.xml"
+        if candidate.exists():
+            return candidate
+        current = current.parent
+    return None
+
+
+def _get_stage_position(pyramid_path: Path) -> StagePosition | None:
+    """Extract the global stage position of a stitched tileset from MapsProject.xml.
+
+    Walks up from ``pyramid_path`` to find ``MapsProject.xml``, then matches
+    the tileset to its layer entry using the channel GUID from
+    ``MultiChannelParams.xml``. Returns None silently if any file is missing
+    or no matching entry is found, so stitching can proceed without it.
+
+    Parameters
+    ----------
+    pyramid_path : Path
+        Directory containing ``pyramid.xml``.
+
+    Returns
+    -------
+    StagePosition | None
+        Global stage position, or None if the lookup fails at any step.
+    """
+    _PROJ = "http://schemas.datacontract.org/2004/07/Fei.Applications.Perseus.Project"
+    _SAL = "http://schemas.datacontract.org/2004/07/Fei.Applications.SAL"
+    _ZID = "{http://schemas.microsoft.com/2003/10/Serialization/}Id"
+    _ZREF = "{http://schemas.microsoft.com/2003/10/Serialization/}Ref"
+    _INIL = "{http://www.w3.org/2001/XMLSchema-instance}nil"
+    _ITYPE = "{http://www.w3.org/2001/XMLSchema-instance}type"
+
+    def _p(ns: str, tag: str) -> str:
+        return f"{{{ns}}}{tag}"
+
+    def _resolve(id_map: dict[str, str], el: ET.Element | None) -> str | None:
+        if el is None:
+            return None
+        if el.get(_INIL) == "true":
+            ref = el.get(_ZREF)
+            return id_map.get(ref) if ref else None
+        ref = el.get(_ZREF)
+        if ref:
+            return id_map.get(ref)
+        val = el.get("Value")
+        if val:
+            return val
+        return el.text.strip() if el.text and el.text.strip() else None
+
+    channel_guid = _get_tileset_guid(pyramid_path)
+    if channel_guid is None:
+        return None
+
+    project_path = _find_maps_project(pyramid_path)
+    if project_path is None:
+        return None
+
+    tree = ET.parse(project_path)
+    root = tree.getroot()
+
+    # Pass 1: build z:Id to value map to resolve WCF cross-references
+    id_map: dict[str, str] = {}
+    for el in root.iter():
+        zid = el.get(_ZID)
+        if zid:
+            if el.text and el.text.strip():
+                id_map[zid] = el.text.strip()
+            val = el.get("Value")
+            if val:
+                id_map[zid] = val
+
+    # Pass 2: find the stitched ImagePyramidLayer matching the channel GUID
+    for el in root.iter():
+        if el.get(_ITYPE) != "ImagePyramidLayer":
+            continue
+        if _resolve(id_map, el.find(_p(_PROJ, "pyramidAsSource"))) != "true":
+            continue
+        ch_defs = el.find(_p(_PROJ, "NewChannelDefinitions"))
+        if ch_defs is None:
+            continue
+        guids = [
+            _resolve(id_map, ch.find(_p(_PROJ, "guid")))
+            for ch in ch_defs.findall(_p(_PROJ, "ChannelDefinition"))
+        ]
+        if channel_guid not in guids:
+            continue
+
+        sp = el.find(_p(_PROJ, "StagePosition"))
+        if sp is None:
+            return None
+        center_x = _resolve(id_map, sp.find(_p(_SAL, "x")))
+        center_y = _resolve(id_map, sp.find(_p(_SAL, "y")))
+        hfw = _resolve(id_map, el.find(_p(_PROJ, "HorizontalFieldWidth")))
+        vfw = _resolve(id_map, el.find(_p(_PROJ, "VerticalFieldWidth")))
+        if center_x is None or center_y is None or hfw is None or vfw is None:
+            return None
+
+        topleft_x = float(center_x) - float(hfw) / 2
+        topleft_y = float(center_y) - float(vfw) / 2
+        return StagePosition(x=Length(topleft_x), y=Length(topleft_y))
+
+    return None
+
+
+def _crop_image(
+    image: np.ndarray, metadata: TilesetMetadata
+) -> tuple[np.ndarray, TilesetMetadata]:
+    """Crop black borders from a stitched image and update metadata accordingly.
+
+    Computes the bounding box of non-zero pixels and crops the image to it.
+    If the top-left corner shifts, the stage position in the returned metadata is
+    corrected by the corresponding physical offset. If the stage position is navailable
+    or the origin does not move (i.e. only bottom or right borders are removed), the
+    original metadata is returned unchanged.
+
+    .. note::
+        This will produce a copy of the array, so this function briefly
+        holds two full copies of the image in memory. This should be kept in mind when
+        working close to memory limits.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Stitched image array, possibly with black borders from incomplete tiles.
+    metadata : TilesetMetadata
+        Physical metadata associated with the image prior to cropping.
+
+    Returns
+    -------
+    image_crop : np.ndarray
+        Image cropped to the bounding box of non-zero pixels.
+    metadata : TilesetMetadata
+        Updated metadata with corrected stage position if the origin moved,
+        otherwise the original metadata unchanged.
+    """
+    indexer = get_crop_idx(image)
+    origin_moves = any(i.start != 0 for i in indexer)
+    image_crop = image[indexer]
+
+    new_metadata = None
+    if origin_moves and metadata.stage_position is not None:
+        new_origin_y = Length(
+            metadata.stage_position.y.m + indexer[0].start * metadata.pixel_size.y.m
+        )
+        new_origin_x = Length(
+            metadata.stage_position.x.m + indexer[1].start * metadata.pixel_size.x.m
+        )
+        new_metadata = TilesetMetadata(
+            pixel_size=metadata.pixel_size,
+            stage_position=StagePosition(x=new_origin_x, y=new_origin_y),
+        )
+    return image_crop, new_metadata or metadata
