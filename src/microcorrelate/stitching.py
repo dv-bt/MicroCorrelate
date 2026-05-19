@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from dataclasses import dataclass
 import xml.etree.ElementTree as ET
+import warnings
 
 import numpy as np
 import xmltodict
@@ -206,14 +207,15 @@ def stitch_images(
     tile_list = _get_tile_list(pyramid_path)
     image_stitch = _generate_empty_image(pyramid_path, tile_shape)
 
-    vprint("Saving image...", verbose)
     for image_path in tqdm(tile_list, "Stitching tiles", disable=not verbose):
         image_stitch = _stitch_tile(image_stitch, image_path, tile_shape)
 
     # Crop black borders, if present
     if crop_borders:
+        vprint("Cropping black border from empty tiles", verbose)
         image_stitch, metadata = _crop_image(image=image_stitch, metadata=metadata)
 
+    vprint("Saving image...", verbose)
     if dest_path.suffix in [".tif", ".tiff"]:
         _save_stitch_tiff(dest_path, image_stitch, metadata, compression)
     elif dest_path.suffix == ".zarr":
@@ -431,6 +433,8 @@ def _save_stitch_zarr(
 
 
 def _get_tileset_guid(pyramid_path: Path) -> str | None:
+    """Get tileset GUID from MultiChannelParams.xml, return None if GUID or file
+    not found"""
     xml_path = pyramid_path.parents[1] / "MultiChannelParams.xml"
     if not xml_path.exists():
         return None
@@ -448,7 +452,9 @@ def _find_maps_project(start_path: Path, max_levels: int = 6) -> Path | None:
     start_path : Path
         Directory to start searching from.
     max_levels : int
-        Maximum number of parent directories to search. Default is 6.
+        Maximum number of parent directories to search. Default is 6. In the canonical
+        Maps directory structure, the MapsProject.xml is 4 levels up from the pyramid
+        path.
 
     Returns
     -------
@@ -508,10 +514,21 @@ def _get_stage_position(pyramid_path: Path) -> StagePosition | None:
 
     channel_guid = _get_tileset_guid(pyramid_path)
     if channel_guid is None:
+        warnings.warn(
+            "Stage position unavailable: "
+            "MultiChannelParams.xml not found or contains no GUID.",
+            UserWarning,
+            stacklevel=2,
+        )
         return None
 
     project_path = _find_maps_project(pyramid_path)
     if project_path is None:
+        warnings.warn(
+            "Stage position unavailable: MapsProject.xml not found.",
+            UserWarning,
+            stacklevel=2,
+        )
         return None
 
     tree = ET.parse(project_path)
@@ -558,6 +575,11 @@ def _get_stage_position(pyramid_path: Path) -> StagePosition | None:
         topleft_y = float(center_y) - float(vfw) / 2
         return StagePosition(x=Length(topleft_x), y=Length(topleft_y))
 
+    warnings.warn(
+        "Stage position unavailable: tileset GUID not found in MapsProject.xml.",
+        UserWarning,
+        stacklevel=2,
+    )
     return None
 
 
