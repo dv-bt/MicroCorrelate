@@ -32,7 +32,7 @@ myst_enable_extensions = ["colon_fence"]
 html_theme = "pydata_sphinx_theme"
 html_theme_options = {
     "github_url": "https://github.com/dv-bt/MicroCorrelate",
-    "logo": {"text": "MicroCorrelate"},
+    "logo": {"text": f"MicroCorrelate v{release}"},
     "show_toc_level": 2,
 }
 html_static_path = ["_static"]
